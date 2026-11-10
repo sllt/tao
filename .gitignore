@@ -1,0 +1,33 @@
+# Local tools and editor settings
+.DS_Store
+/.vscode/
+/.idea/
+/.local/
+/.references/
+
+# Build, coverage and profiling output
+/bin/
+/dist/
+*.test
+*.pprof
+coverage.out
+go.work.sum
+
+# Local benchmarks, measurements and validation records
+/actor/benchmarks/
+/taonet/benchmarks/
+/actor/internal/benchwork/
+/actor/etcd/runtime_benchmark_test.go
+/actor/pid_registry_benchmark_test.go
+**/results/
+/actor/validation/
+/actor/examples/soak/soak-*.jsonl
+
+# Development notes retained locally, not part of the project distribution
+/AGENTS.md
+/TODO.md
+/go_otp_actor_design.md
+/docs/archive/
+/docs/development_notes.md
+/docs/taonet_protocol_design.md
+/docs/taonet_mux_design.md

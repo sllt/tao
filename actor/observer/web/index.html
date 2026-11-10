@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hive Observer</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<aside class="rail"><a class="brand" href="/" aria-label="Hive Observer">H<span>·</span></a><div class="rail-label">HIVE</div><div class="rail-mark active" title="运行时">◈</div><div class="rail-line"></div><span class="rail-bottom">OBS<br>01</span></aside>
+<div class="shell">
+<header><div><div class="eyebrow">RUNTIME / LIVE INSPECTION</div><h1>Observer <span>运行时观察</span></h1></div><div class="controls"><span id="connection" class="live">连接中</span><select id="node" aria-label="选择节点"></select><button id="pause">暂停更新</button></div></header>
+<div id="error" class="error hidden" role="alert"></div>
+<main>
+<section class="intro"><div><span class="section-number">01</span><h2 id="node-name">等待节点</h2><span id="uptime" class="muted"></span></div><span class="read-only">只读观察 · 1 秒刷新</span></section>
+<section class="metrics">
+<article><div class="metric-label">ACTORS <span>在册实例</span></div><strong id="actors-count">—</strong><div id="actor-status" class="metric-note">等待数据</div></article>
+<article><div class="metric-label">MAILBOX <span>待处理消息</span></div><strong id="mailbox-count">—</strong><div id="mailbox-note" class="metric-note">有界业务邮箱</div></article>
+<article><div class="metric-label">CALLS <span>等待回复</span></div><strong id="calls-count">—</strong><div id="calls-note" class="metric-note">查看调用等待关系</div></article>
+<article><div class="metric-label">HEAP <span>宿主 Go 进程</span></div><strong id="heap-count">—</strong><div id="host-note" class="metric-note">包含该进程全部节点</div></article>
+</section>
+<section class="panel actors-panel"><div class="panel-head"><div><span class="section-number">02</span><h2>Actor 视图</h2><span id="actor-total" class="pill">0</span></div><div class="controls"><div class="segmented"><button id="tree-view" class="selected">监督树</button><button id="list-view">列表</button></div><input id="filter" placeholder="筛选路径或 Kind…" aria-label="筛选 Actor"></div></div>
+<div class="split"><div class="actor-table"><table><thead><tr><th>路径 / 实例</th><th>状态</th><th>邮箱</th><th>处理 / 秒</th><th>重启</th></tr></thead><tbody id="actor-rows"></tbody></table><div id="empty" class="empty">节点尚无 Actor。启动业务后将在这里显示。</div><div class="pager"><button id="first-page">回到第一页</button><span id="page-note" class="muted"></span><button id="next-page" disabled>下一页 →</button></div></div>
+<aside class="detail"><div id="detail-empty" class="empty"><span class="detail-symbol">⌁</span><h3>选择一个 Actor</h3><p>查看身份、处理耗时、监督关系<br>以及业务显式提供的状态。</p></div><div id="detail-content" class="hidden"><div class="detail-title"><span class="eyebrow">ACTOR DETAIL</span><span id="detail-state" class="status"></span></div><h3 id="detail-path"></h3><p id="detail-pid" class="mono wrap"></p><dl id="detail-fields"></dl><h4>关系</h4><div id="relationships" class="relation-list"></div><div class="inspect-head"><h4>业务状态</h4><button id="inspect">检查状态</button></div><p class="muted small">仅调用业务实现的 Inspector；繁忙 Actor 可能超时。</p><pre id="inspect-result">尚未请求</pre></div></aside></div>
+</section>
+<div class="bottom-grid"><section class="panel"><div class="panel-head"><div><span class="section-number">03</span><h2>调用等待</h2></div><span id="cycle-count" class="muted"></span></div><div id="cycles" class="cycles"></div><div id="calls" class="records"></div></section>
+<section class="panel"><div class="panel-head"><div><span class="section-number">04</span><h2>网络连接</h2></div><span id="session-count" class="pill">0</span></div><div id="network-summary" class="network-summary"></div><div id="peers" class="records"></div></section></div>
+<footer><span>HIVE OBSERVER <span class="muted">/ 节点快照用于诊断，不作为所有权证明</span></span><span id="sample-time">—</span></footer>
+</main></div></body></html>
