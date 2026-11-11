@@ -158,7 +158,7 @@ func (w *network) queueReservedMessage(peer string, class taonet.TrafficClass, p
 		if err == nil && incoming != nil {
 			// Business completion already won. Keep cancellation/capacity state
 			// until the reply is queued, then retire it in this same transaction.
-			delete(w.incoming, incoming.remoteKey)
+			delete(w.incoming, incoming.remoteKey())
 		}
 	}
 	w.mu.Unlock()
@@ -763,6 +763,7 @@ func (w *network) admitInbox(ctx context.Context, peer taonet.Peer, scope wireSc
 	// lock. Admission and CANCEL bookkeeping still commit together below.
 	state := &incomingRequestState{scope: requestScope{parent: w.ctx, deadline: deadline, hasDeadline: true}}
 	budget, prepared := &state.scope, &state.request
+	prepared.remote = &state.remote
 	incoming := incomingCall{budget: budget, scope: scope, sequence: packet.Sequence}
 	w.mu.Lock()
 	if w.closed {
@@ -804,7 +805,7 @@ func (w *network) admitInbox(ctx context.Context, peer taonet.Peer, scope wireSc
 		return
 	}
 	if r.kind != requestActorPID {
-		r.remoteKey = packet.Key
+		r.setRemoteKey(packet.Key)
 	}
 	if r.kind != requestActorPID && w.node.diagnostics.Load() {
 		w.node.mu.Lock()
@@ -857,11 +858,11 @@ func (w *network) finishIncoming(r *request, accepted bool) {
 			return
 		}
 		w.mu.Lock()
-		delete(w.incoming, r.remoteKey)
+		delete(w.incoming, r.remoteKey())
 		w.mu.Unlock()
 	}()
 	if accepted && !r.forwarded.Load() {
-		retired = w.sendReply(r.remoteKey, r.value, r.err, MoveID{}, r)
+		retired = w.sendReply(r.remoteKey(), r.value, r.err, MoveID{}, r)
 	}
 }
 

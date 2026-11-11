@@ -2,16 +2,25 @@ package actor
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"time"
 )
 
+const (
+	inlineActive uint32 = iota
+	inlineReplied
+	inlineExpired
+	inlinePromoted
+)
+
 type request struct {
 	trace                        *requestTrace // owning registry lock; allocated only with diagnostics enabled
-	remoteKey                    requestKey
-	move                         MoveID
-	forwarded                    atomic.Bool // set under node.mu; completion reads without registry lock
-	relocated                    bool        // node.mu; local caller now waits for a remote owner
+	remote                       *requestKey   // immutable after admission; nil for local and outgoing requests
+	forwarded                    atomic.Bool   // set under node.mu; completion reads without registry lock
+	relocated                    bool          // node.mu; local caller now waits for a remote owner
+	inline                       bool          // immutable; lock-free local PID call until promoted by Defer/waitDone
+	inlineState                  atomic.Uint32 // inlineActive, inlineReplied, inlineExpired, inlinePromoted
 	node                         *Node
 	id                           uint64
 	owner                        PID
@@ -22,10 +31,27 @@ type request struct {
 	value                        any
 	err                          error
 	kind                         requestKind      // immutable completion domain
-	origin                       CompletionOrigin // owning registry lock
-	completed, expired, deferred bool             // owning registry lock
+	origin                       CompletionOrigin // owning registry lock or inline CAS winner
+	completed, expired, deferred bool             // owning registry lock or inline CAS winner
 	settled                      atomic.Bool      // publishes the result to completion hooks and the executor
 	completion                   atomic.Pointer[requestCompletion]
+}
+
+func (r *request) remoteKey() requestKey {
+	if r.remote == nil {
+		return requestKey{}
+	}
+	return *r.remote
+}
+
+func (r *request) setRemoteKey(key requestKey) {
+	if key == (requestKey{}) && r.remote == nil {
+		return
+	}
+	if r.remote == nil {
+		r.remote = new(requestKey)
+	}
+	*r.remote = key
 }
 
 type requestKind uint8
@@ -40,7 +66,10 @@ func (r *request) actorRequests() *actorRequests {
 	if r.kind != requestActorPID {
 		return nil
 	}
-	return r.ctx.(*requestScope).actorOwner
+	if r.inline && r.inlineState.Load() != inlinePromoted {
+		return nil
+	}
+	return r.ctx.(*requestScope).actorOwner.Load()
 }
 
 func (r *request) context() context.Context {
@@ -82,6 +111,17 @@ var completedRequestSignal = func() <-chan struct{} {
 // channel; Defer/Replace/Handoff can attach one under the completion lock.
 // The caller keeps an independently owned reusable result signal.
 func (r *request) waitDone() <-chan struct{} {
+	if r.inline && r.inlineState.Load() != inlinePromoted {
+		if owner := r.promoteInline(false); owner != nil {
+			owner.mu.Lock()
+			defer owner.mu.Unlock()
+			return r.waitDoneLocked()
+		}
+		for !r.settled.Load() {
+			runtime.Gosched()
+		}
+		return completedRequestSignal
+	}
 	if owner := r.actorRequests(); owner != nil {
 		owner.mu.Lock()
 		defer owner.mu.Unlock()
@@ -135,20 +175,20 @@ func (r *request) bindCompletion(hook *requestCompletion) bool {
 }
 
 func (r *request) finish() {
-	if r.kind == requestActorPID {
+	if r.kind == requestActorPID && r.done != nil {
 		// Only the successful commit reaches finish. waitDoneLocked never
 		// attaches a new broadcast channel after completed is published.
-		if r.done != nil {
-			close(r.done)
-		}
-		if r.callerDone != nil {
-			r.callerDone <- struct{}{}
-		}
+		close(r.done)
 	}
-	if hook := r.completion.Swap(nil); hook != nil {
-		hook.run(r)
+	if r.completion.Load() != nil {
+		if hook := r.completion.Swap(nil); hook != nil {
+			hook.run(r)
+		}
 	}
 	r.cancelContext()
+	if r.kind == requestActorPID && r.callerDone != nil {
+		r.callerDone <- struct{}{}
+	}
 }
 
 func (r *request) cancelContext() {
@@ -160,8 +200,13 @@ func (r *request) cancelContext() {
 }
 
 func (n *Node) call(ctx context.Context, to Addr, msg any, sender *process) (any, error) {
+	plainCtx := ctx == context.Background() || ctx == context.TODO()
+	if !plainCtx {
+		_, deadline := ctx.Deadline()
+		plainCtx = !deadline && ctx.Done() == nil
+	}
 	if n.network != nil && !n.isGlobal(to) && remoteNode(to, n.Name()) != "" {
-		if _, deadline := ctx.Deadline(); !deadline && ctx.Done() == nil {
+		if plainCtx {
 			var from PID
 			if sender != nil {
 				from = sender.pid
@@ -171,14 +216,16 @@ func (n *Node) call(ctx context.Context, to Addr, msg any, sender *process) (any
 	}
 	// Actor.Call supplies its own cancellable context. Only ordinary Node.Call
 	// without caller cancellation/deadline enters the lightweight local path.
-	if _, deadline := ctx.Deadline(); !deadline && ctx.Done() == nil {
+	if plainCtx {
 		local := false
 		switch address := to.(type) {
 		case PID:
 			local = address.Node == n.Name()
 			if local && sender == nil {
-				if err := ctx.Err(); err != nil {
-					return nil, err
+				if ctx != context.Background() && ctx != context.TODO() {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
 				}
 				return n.callLocalPID(ctx, address, msg)
 			}
@@ -186,8 +233,10 @@ func (n *Node) call(ctx context.Context, to Addr, msg any, sender *process) (any
 			local = !n.isGlobal(to) && (address.Node == "" || address.Node == n.Name())
 		}
 		if local {
-			if err := ctx.Err(); err != nil {
-				return nil, err
+			if ctx != context.Background() && ctx != context.TODO() {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 			}
 			return n.callLocal(ctx, nil, to, msg, sender, true)
 		}
@@ -228,25 +277,64 @@ type localCallState struct {
 }
 
 // A physical local PID cannot transfer its requests to another process. Use
-// the same completion domain as incoming PID Calls, independent of node.mu.
+// lock-free inline completion until Defer/waitDone promotes to actorRequests.
 func (n *Node) callLocalPID(ctx context.Context, to PID, msg any) (any, error) {
 	deadline := time.Now().Add(n.opts.CallTimeout)
 	p, err := n.resolvePID(to)
 	if err != nil {
 		return nil, err
 	}
-	state := &localCallState{scope: requestScope{parent: ctx, deadline: deadline, hasDeadline: true, callerTimer: true}}
-	r, scope := &state.request, &state.scope
-	done := n.takeCallSignal()
-	defer n.recycleCallSignal(done)
-	r.callerDone = done
-	if err := p.registerActorRequest(r, scope, nil); err != nil {
-		scope.finish()
+	if n.diagnostics.Load() {
+		state := &localCallState{scope: requestScope{parent: ctx, deadline: deadline, hasDeadline: true, callerTimer: true}}
+		r, scope := &state.request, &state.scope
+		done := n.takeCallSignal()
+		defer n.recycleCallSignal(done)
+		r.callerDone = done
+		if err := p.registerActorRequest(r, scope, nil); err != nil {
+			scope.finish()
+			return nil, err
+		}
+		scope.start()
+		if err := p.enqueue(envelope{message: msg, request: r}); err != nil {
+			_ = n.reply(r, p.pid, nil, err, true)
+		}
+		<-done
+		scope.releaseCallerTimer()
+		return r.value, r.err
+	}
+	if p.incomingRequests.Load() == closedActorRequests || n.stopping.Load() {
+		return nil, ErrStopped
+	}
+	if err := n.reservePendingCall(); err != nil {
 		return nil, err
 	}
+	if !p.inlineCallsUsed.Load() {
+		p.inlineCallsUsed.Store(true)
+	}
+	done := n.takeCallSignal()
+	defer n.recycleCallSignal(done)
+	state := &localCallState{
+		request: request{
+			inline:     true,
+			node:       n,
+			owner:      p.pid,
+			callerDone: done,
+			kind:       requestActorPID,
+		},
+		scope: requestScope{
+			parent:      ctx,
+			deadline:    deadline,
+			hasDeadline: true,
+			callerTimer: true,
+		},
+	}
+	r, scope := &state.request, &state.scope
+	r.ctx = scope
+	scope.request = r
+	scope.actorProc.Store(p)
 	scope.start()
 	if err := p.enqueue(envelope{message: msg, request: r}); err != nil {
-		_ = n.reply(r, p.pid, nil, err, true)
+		_ = r.replyInline(p.pid, nil, err, true, Reply)
 	}
 	<-done
 	scope.releaseCallerTimer()
@@ -324,6 +412,9 @@ func (n *Node) callLocal(ctx context.Context, cancel context.CancelFunc, to Addr
 }
 
 func (n *Node) noReply(r *request, owner PID) error {
+	if r.inline {
+		return r.replyInline(owner, nil, ErrNoReply, true, NoReply)
+	}
 	if domain := r.actorRequests(); domain != nil {
 		return domain.replyWithOrigin(r, owner, nil, ErrNoReply, true, NoReply)
 	}
@@ -331,6 +422,9 @@ func (n *Node) noReply(r *request, owner PID) error {
 }
 
 func (n *Node) reply(r *request, owner PID, value any, err error, expired bool) error {
+	if r.inline {
+		return r.replyInline(owner, value, err, expired, Reply)
+	}
 	if domain := r.actorRequests(); domain != nil {
 		return domain.reply(r, owner, value, err, expired)
 	}
@@ -377,17 +471,24 @@ func (n *Node) failRequests(p *process, reason error) {
 }
 
 func (n *Node) failRequestsExcept(p *process, reason error, keep map[*request]bool) {
+	var failed []*request
+	if p.inlineCallsUsed.Load() {
+		p.mu.Lock()
+		failed = p.failInlineRequestsLocked(reason)
+		p.mu.Unlock()
+	}
 	// Send-only actors have no request to fail. Avoid joining the global
 	// request/registry lock queue on every normal stop in a fan-out workload.
 	// Ownership registration/transfer sets this before publishing the request.
 	if !p.callsUsed.Load() {
-		for _, r := range p.closeActorRequests(reason) {
+		failed = append(failed, p.closeActorRequests(reason)...)
+		for _, r := range failed {
 			r.finish()
 		}
 		return
 	}
 	n.mu.Lock()
-	failed := n.failRequestsLocked(p, reason, keep)
+	failed = append(failed, n.failRequestsLocked(p, reason, keep)...)
 	n.mu.Unlock()
 	for _, r := range failed {
 		r.finish()

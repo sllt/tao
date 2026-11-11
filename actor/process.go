@@ -60,6 +60,8 @@ type process struct {
 	observationsEnded                                      bool        // node.mu
 	published                                              atomic.Bool // stores hold mu; indexes precede true
 	current                                                envelope    // executor only; zero between Receive calls
+	inFlightCall                                           *request    // mu; popped inline PID Call until its turn finishes
+	inlineCallsUsed                                        atomic.Bool // monotonic: this instance has owned an inline PID Call
 }
 
 func newProcess(node *Node, parent *process, path string, pid PID, factory Factory, opts spawnOptions) *process {
@@ -122,6 +124,10 @@ func (p *process) enqueueFrom(message envelope, accepted func() error, source *p
 		p.mu.Unlock()
 		return ErrStopped
 	}
+	if message.request != nil && (p.unresponsive || (message.request.inline && p.node.stopping.Load())) {
+		p.mu.Unlock()
+		return ErrStopped
+	}
 	// A producer holds mu, so no new batch can be detached concurrently.
 	// With more than a full batch of spare slots, even the largest possible
 	// unclaimed suffix leaves room for this message. Equality needs the count.
@@ -155,7 +161,11 @@ func (p *process) enqueueFrom(message envelope, accepted func() error, source *p
 				return nil
 			}
 		}
-		p.schedule()
+		if message.request != nil {
+			p.scheduleCall()
+		} else {
+			p.schedule()
+		}
 	}
 	return nil
 }
@@ -279,6 +289,7 @@ func (p *process) runWithBatch(storage **mailboxBatch) *process {
 	freshBudget := turn != nil
 	for {
 		p.mu.Lock()
+		p.inFlightCall = nil
 		afterPureBatch := restore != nil
 		if restore != nil {
 			if len(restore) > 0 {
@@ -399,6 +410,9 @@ func (p *process) runWithBatch(storage **mailboxBatch) *process {
 			}
 		}
 		message := p.mailbox.pop()
+		if message.request != nil && message.request.inline {
+			p.inFlightCall = message.request
+		}
 		p.mu.Unlock()
 		if message.request != nil {
 			if err := message.request.contextErr(); err != nil {

@@ -12,7 +12,8 @@ import (
 // a standard context and transfers deadline notification to its AfterFunc, so
 // children, values, Cause and cancellation retain standard-library behavior.
 type requestScope struct {
-	actorOwner   *actorRequests // ordinary PID completion domain; node is available through request
+	actorOwner   atomic.Pointer[actorRequests] // ordinary PID completion domain; node is available through request
+	actorProc    atomic.Pointer[process]       // target process for lazy inline promotion; cleared on promotion or finish
 	request      *request
 	outgoing     *outgoingCall // immutable before start; nil for local/incoming Calls
 	parent       context.Context
@@ -23,13 +24,13 @@ type requestScope struct {
 	reason       atomic.Uint32 // 0 active, 1 canceled, 2 deadline exceeded
 	materialized atomic.Pointer[requestScopeCallbacks]
 	timer        *requestTimer
-	callbacks    *requestScopeCallbacks // mu; allocated only for a public Context or a watched parent
+	callbacks    *requestScopeCallbacks // mu; allocated only for a public Context, watched parent, or custom cause
 	canceled     chan struct{}          // mu; private transport waiter, independent of public Context
-	cause        error                  // mu; first completion's context cause
 }
 
 type requestScopeCallbacks struct {
 	ctx           context.Context // immutable after materialized publishes this object
+	cause         error           // mu; non-standard completion cause
 	cancelContext context.CancelFunc
 	cancelCause   context.CancelCauseFunc
 	stopParent    func() bool
@@ -92,8 +93,10 @@ func (s *requestScope) err() error {
 	if ctx := s.materialized.Load(); ctx != nil {
 		return ctx.ctx.Err()
 	}
-	if err := s.parent.Err(); err != nil {
-		return err
+	if s.parent != context.Background() && s.parent != context.TODO() {
+		if err := s.parent.Err(); err != nil {
+			return err
+		}
 	}
 	if s.hasDeadline && time.Until(s.deadline) <= 0 {
 		return context.DeadlineExceeded
@@ -135,16 +138,20 @@ func (s *requestScope) complete(reason error, timerSource bool) bool {
 			reason = err
 			cause = context.Cause(ctx.ctx)
 		}
-	} else if err := s.parent.Err(); err != nil {
-		reason = err
-		cause = context.Cause(s.parent)
+	} else if s.parent != context.Background() && s.parent != context.TODO() {
+		if err := s.parent.Err(); err != nil {
+			reason = err
+			cause = context.Cause(s.parent)
+		}
 	}
 	state := uint32(1)
 	if reason == context.DeadlineExceeded {
 		state = 2
 	}
 	s.reason.Store(state)
-	s.cause = cause
+	if (cause != context.Canceled && cause != context.DeadlineExceeded) || s.callbacks != nil {
+		s.callbacksLocked().cause = cause
+	}
 	if s.canceled != nil {
 		close(s.canceled)
 	}
@@ -217,10 +224,29 @@ func (s *requestScope) expire() {
 	s.request.node.expireRequest(s.request, s.err())
 }
 
+func (s *requestScope) causeLocked(state uint32) error {
+	if s.callbacks != nil && s.callbacks.cause != nil {
+		return s.callbacks.cause
+	}
+	switch state {
+	case 1:
+		return context.Canceled
+	case 2:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 func (s *requestScope) finish() {
-	reason := s.err()
-	if reason == nil {
-		reason = context.Canceled
+	if s.actorProc.Load() != nil {
+		s.actorProc.Store(nil)
+	}
+	reason := context.Canceled
+	if r := s.request; r == nil || !r.settled.Load() || r.expired {
+		if err := s.err(); err != nil {
+			reason = err
+		}
 	}
 	s.complete(reason, false)
 }
@@ -246,6 +272,7 @@ func (s *requestScope) context() context.Context {
 	}
 	parent := s.parent
 	state := s.reason.Load()
+	cause := s.causeLocked(state)
 	callbacks := s.callbacksLocked()
 	var ctx context.Context
 	if !s.hasDeadline {
@@ -253,7 +280,7 @@ func (s *requestScope) context() context.Context {
 			parent = context.WithoutCancel(parent)
 			var cancelCause context.CancelCauseFunc
 			ctx, cancelCause = context.WithCancelCause(parent)
-			cancelCause(s.cause)
+			cancelCause(cause)
 		} else {
 			ctx, callbacks.cancelCause = context.WithCancelCause(parent)
 		}
@@ -265,11 +292,11 @@ func (s *requestScope) context() context.Context {
 			if state == 1 {
 				var cancel context.CancelCauseFunc
 				parent, cancel = context.WithCancelCause(parent)
-				cancel(s.cause)
+				cancel(cause)
 			}
 		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadlineCause(parent, s.deadline, s.cause)
+		ctx, cancel = context.WithDeadlineCause(parent, s.deadline, cause)
 		callbacks.cancelContext = cancel
 	}
 	callbacks.ctx = ctx

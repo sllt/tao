@@ -46,10 +46,14 @@ func (h *CallHandle) Cancel() bool {
 		return false
 	}
 	scope, ok := h.request.ctx.(*requestScope)
-	if !ok || scope.actorOwner == nil {
+	if !ok {
 		return false
 	}
-	return scope.actorOwner.cancel(h.request, scope)
+	owner := scope.actorOwner.Load()
+	if owner == nil {
+		return false
+	}
+	return owner.cancel(h.request, scope)
 }
 
 type beginCallState struct {

@@ -224,9 +224,13 @@ func (n *Node) Snapshot(options SnapshotOptions) (NodeSnapshot, error) {
 	result.Draining = n.draining
 	var candidates []snapshotCandidate
 	var owners []*actorRequests
+	var inlineProcs []*process
 	for _, p := range n.processes {
 		if owner := p.incomingRequests.Load(); owner != nil && owner != closedActorRequests {
 			owners = append(owners, owner)
+		}
+		if p.inlineCallsUsed.Load() {
+			inlineProcs = append(inlineProcs, p)
 		}
 		if strings.Contains(p.path, options.Filter) || strings.Contains(p.opts.kind, options.Filter) {
 			candidates = append(candidates, snapshotCandidate{p, p.published.Load(), n.routes[p.path].status()})
@@ -267,6 +271,24 @@ func (n *Node) Snapshot(options SnapshotOptions) (NodeSnapshot, error) {
 			result.Calls = append(result.Calls, CallSnapshot{ID: strconv.FormatUint(r.id, 10), Caller: diagnosticPID(trace.caller), Owner: diagnosticPID(r.owner), Target: trace.target, Started: trace.started, Deadline: deadline, Deferred: r.deferred, Asynchronous: r.asynchronous()})
 		}
 		owner.mu.Unlock()
+	}
+	for _, p := range inlineProcs {
+		if len(result.Calls) == 1000 {
+			break
+		}
+		p.mu.Lock()
+		appendInline := func(r *request) {
+			if r == nil || !r.inline || r.inlineState.Load() != inlineActive || len(result.Calls) == 1000 {
+				return
+			}
+			deadline, _ := r.deadline()
+			result.Calls = append(result.Calls, CallSnapshot{Owner: diagnosticPID(r.owner), Target: p.pid.String(), Deadline: deadline})
+		}
+		appendInline(p.inFlightCall)
+		for i := 0; i < p.mailbox.size && len(result.Calls) < 1000; i++ {
+			appendInline(p.mailbox.at(i).request)
+		}
+		p.mu.Unlock()
 	}
 	// Direct remote PID requests have no node.pending entry. Never take the
 	// network lock under node.mu: incoming admission still uses the reverse order.

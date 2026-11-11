@@ -70,6 +70,7 @@ type outgoingRequestState struct {
 type incomingRequestState struct {
 	request request
 	scope   requestScope
+	remote  requestKey
 }
 
 type outgoingRoute struct {
@@ -525,6 +526,9 @@ func (w *network) registerRequestInto(r *request, ctx context.Context, cancel co
 }
 
 func (n *Node) expireRequest(r *request, err error) bool {
+	if r.inline {
+		return r.expireInline(err, Canceled)
+	}
 	if owner := r.actorRequests(); owner != nil {
 		return owner.expire(r, err)
 	}

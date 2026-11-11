@@ -58,6 +58,14 @@ func (p *process) retire(reason, cleanup error) (bool, bool) {
 		restart = !p.parent.stopRequested
 		p.parent.mu.Unlock()
 	}
+	failure := reason
+	if failure == nil {
+		failure = ErrStopped
+	}
+	var inlineFailed []*request
+	if p.inlineCallsUsed.Load() {
+		inlineFailed = p.failInlineRequestsLocked(failure)
+	}
 	var saved []envelope
 	var released []func()
 	keep := make(map[*request]bool)
@@ -82,11 +90,7 @@ func (p *process) retire(reason, cleanup error) (bool, bool) {
 			delete(n.routes, p.path)
 		}
 	}
-	failure := reason
-	if failure == nil {
-		failure = ErrStopped
-	}
-	failed := n.failRequestsLocked(p, failure, keep)
+	failed := append(inlineFailed, n.failRequestsLocked(p, failure, keep)...)
 	n.publishPIDLocked(p, false)
 	delete(n.processes, p.pid.ID)
 	p.mailbox = mailbox{limit: p.mailbox.limit}
@@ -154,7 +158,13 @@ func (p *process) discardChild(spec *childSpec, old *process) {
 	if r.process == old && !errors.Is(r.err, ErrUnresponsive) {
 		delete(p.node.routes, spec.path)
 	}
-	failed := p.node.failRequestsLocked(old, ErrStopped, nil)
+	var inlineFailed []*request
+	if old.inlineCallsUsed.Load() {
+		old.mu.Lock()
+		inlineFailed = old.failInlineRequestsLocked(ErrStopped)
+		old.mu.Unlock()
+	}
+	failed := append(inlineFailed, p.node.failRequestsLocked(old, ErrStopped, nil)...)
 	p.node.mu.Unlock()
 	p.childrenMu.Unlock()
 	for _, r := range failed {

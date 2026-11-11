@@ -534,7 +534,7 @@ func (p *process) handoffMessage(ctx context.Context, op *handoffOperation, env 
 	if r := env.request; r != nil {
 		p.node.mu.Lock()
 		completed := r.completed
-		key := r.remoteKey
+		key := r.remoteKey()
 		p.node.mu.Unlock()
 		if completed || r.contextErr() != nil {
 			return handoffFrame{Kind: "skip", Sequence: sequence}, nil
@@ -628,7 +628,7 @@ func (p *process) commitHandoffMailbox(op *handoffOperation) {
 		if env.release != nil {
 			releases = append(releases, env.release)
 		}
-		if env.request != nil && env.request.remoteKey.ID != 0 {
+		if env.request != nil && env.request.remoteKey().ID != 0 {
 			env.request.forwarded.Store(true)
 			forwarded = append(forwarded, env.request)
 		}

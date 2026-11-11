@@ -37,7 +37,7 @@ func (p *process) requestOwner() (*actorRequests, error) {
 }
 
 func (w *network) registerActorRequest(r *request, p *process, scope *requestScope, key requestKey, sender *PID) (*request, error) {
-	r.remoteKey = key
+	r.setRemoteKey(key)
 	if err := p.registerActorRequest(r, scope, sender); err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (p *process) registerActorRequest(r *request, scope *requestScope, sender *
 	if err != nil {
 		return err
 	}
-	scope.actorOwner = owner
+	scope.actorOwner.Store(owner)
 	owner.mu.Lock()
 	if owner.closed || p.node.stopping.Load() {
 		owner.mu.Unlock()
@@ -172,7 +172,168 @@ func (p *process) closeActorRequests(reason error) []*request {
 	return failed
 }
 
+func (r *request) promoteInline(deferring bool) *actorRequests {
+	scope := r.ctx.(*requestScope)
+	for {
+		switch r.inlineState.Load() {
+		case inlinePromoted:
+			owner := scope.actorOwner.Load()
+			if deferring {
+				owner.mu.Lock()
+				r.deferred = true
+				owner.mu.Unlock()
+			}
+			return owner
+		case inlineReplied, inlineExpired:
+			return nil
+		}
+		proc := scope.actorProc.Load()
+		if proc == nil {
+			continue
+		}
+		owner, err := proc.requestOwner()
+		if err != nil {
+			r.expireInline(ErrStopped, TargetExit)
+			scope.actorProc.Store(nil)
+			return nil
+		}
+		owner.mu.Lock()
+		if owner.closed {
+			owner.mu.Unlock()
+			r.expireInline(ErrStopped, TargetExit)
+			scope.actorProc.Store(nil)
+			return nil
+		}
+		if r.inlineState.Load() == inlinePromoted {
+			if deferring {
+				r.deferred = true
+			}
+			owner.mu.Unlock()
+			scope.actorProc.Store(nil)
+			return owner
+		}
+		id, err := r.node.allocateRequestID()
+		if err != nil {
+			owner.mu.Unlock()
+			r.expireInline(err, Canceled)
+			scope.actorProc.Store(nil)
+			return nil
+		}
+		scope.actorOwner.Store(owner)
+		if !r.inlineState.CompareAndSwap(inlineActive, inlinePromoted) {
+			if r.inlineState.Load() != inlinePromoted {
+				scope.actorOwner.Store(nil)
+			}
+			owner.mu.Unlock()
+			scope.actorProc.Store(nil)
+			continue
+		}
+		r.id = id
+		if deferring {
+			r.deferred = true
+		}
+		owner.pending[id] = r
+		owner.mu.Unlock()
+		scope.actorProc.Store(nil)
+		return owner
+	}
+}
+
+func (r *request) replyInline(pid PID, value any, err error, expired bool, origin CompletionOrigin) error {
+	switch r.inlineState.Load() {
+	case inlineReplied:
+		return ErrAlreadyReplied
+	case inlineExpired:
+		return ErrReplyExpired
+	case inlinePromoted:
+		return r.ctx.(*requestScope).actorOwner.Load().replyWithOrigin(r, pid, value, err, expired, origin)
+	}
+	if r.owner != pid {
+		return ErrReplyExpired
+	}
+	commitVal, commitErr, commitExpired, commitOrigin := value, err, expired, origin
+	late := false
+	if cause := r.contextErr(); cause != nil {
+		late, commitExpired, commitVal, commitErr, commitOrigin = !expired, true, nil, cause, Canceled
+	}
+	target := inlineReplied
+	if commitExpired {
+		target = inlineExpired
+	}
+	if r.inlineState.CompareAndSwap(inlineActive, target) {
+		r.value, r.err, r.completed, r.expired, r.origin = commitVal, commitErr, true, commitExpired, commitOrigin
+		r.node.pendingCalls.Add(-1)
+		r.settled.Store(true)
+		r.finish()
+		if late {
+			return ErrReplyExpired
+		}
+		return nil
+	}
+	switch r.inlineState.Load() {
+	case inlineReplied:
+		return ErrAlreadyReplied
+	case inlinePromoted:
+		return r.ctx.(*requestScope).actorOwner.Load().replyWithOrigin(r, pid, value, err, expired, origin)
+	default:
+		return ErrReplyExpired
+	}
+}
+
+func (r *request) expireInline(err error, origin CompletionOrigin) bool {
+	switch r.inlineState.Load() {
+	case inlineReplied, inlineExpired:
+		return false
+	case inlinePromoted:
+		return r.ctx.(*requestScope).actorOwner.Load().expire(r, err)
+	}
+	if r.inlineState.CompareAndSwap(inlineActive, inlineExpired) {
+		r.value, r.err, r.completed, r.expired, r.origin = nil, err, true, true, origin
+		r.node.pendingCalls.Add(-1)
+		r.settled.Store(true)
+		r.finish()
+		return true
+	}
+	if r.inlineState.Load() == inlinePromoted {
+		return r.ctx.(*requestScope).actorOwner.Load().expire(r, err)
+	}
+	return false
+}
+
+func (p *process) failInlineRequestsLocked(reason error) []*request {
+	var failed []*request
+	failOne := func(r *request) {
+		if r == nil || !r.inline || r.inlineState.Load() != inlineActive {
+			return
+		}
+		origin := TargetExit
+		err := reason
+		if cause := r.contextErr(); cause != nil {
+			err = cause
+			origin = Canceled
+		}
+		if r.inlineState.CompareAndSwap(inlineActive, inlineExpired) {
+			r.value, r.err, r.completed, r.expired, r.origin = nil, err, true, true, origin
+			r.node.pendingCalls.Add(-1)
+			r.settled.Store(true)
+			failed = append(failed, r)
+		}
+	}
+	if p.inFlightCall != nil {
+		failOne(p.inFlightCall)
+		p.inFlightCall = nil
+	}
+	for i := 0; i < p.mailbox.size; i++ {
+		failOne(p.mailbox.at(i).request)
+	}
+	return failed
+}
+
 func (r *request) deferReply() {
+	if r.inline {
+		r.promoteInline(true)
+		return
+	}
 	if owner := r.actorRequests(); owner != nil {
 		owner.mu.Lock()
 		r.deferred = true
@@ -185,6 +346,12 @@ func (r *request) deferReply() {
 }
 
 func (r *request) missingReply() bool {
+	if r.inline {
+		state := r.inlineState.Load()
+		if state != inlinePromoted {
+			return state == inlineActive
+		}
+	}
 	if owner := r.actorRequests(); owner != nil {
 		owner.mu.Lock()
 		defer owner.mu.Unlock()

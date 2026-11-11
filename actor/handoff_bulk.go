@@ -228,7 +228,7 @@ func (w *network) stageHandoffEnvelope(reservation *handoffReservation, move Mov
 		cancel()
 		return err
 	}
-	r.remoteKey, r.move = message.Call, move.ID
+	r.setRemoteKey(message.Call)
 	if w.node.diagnostics.Load() {
 		w.node.mu.Lock()
 		trace := r.enableTraceLocked()

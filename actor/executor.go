@@ -41,6 +41,10 @@ func (e *executorPool) init(maxIdle, count int) {
 
 func (p *process) schedule() { p.node.executors.submit(p) }
 
+// Synchronous Callers immediately block waiting for Reply. Dispatch directly to
+// an idle worker when the shard FIFO is empty instead of hopping a 0-timer.
+func (p *process) scheduleCall() { p.node.executors.submitCall(p) }
+
 // New processes already own their initial execution claim. Their creator
 // immediately waits for Started, so dispatch it without a ready callback.
 func (p *process) scheduleStart() { p.node.executors.submitStart(p) }
@@ -49,6 +53,10 @@ func (e *executorPool) submit(p *process) {
 	// Independent actors do not need one shared idle-stack lock. A worker
 	// returns to the same cache, keeping its stack reusable for this shard.
 	e.shards[p.pid.ID%uint64(len(e.shards))].submit(p)
+}
+
+func (e *executorPool) submitCall(p *process) {
+	e.shards[p.pid.ID%uint64(len(e.shards))].submitCall(p)
 }
 
 func (e *executorPool) submitStart(p *process) {
@@ -60,6 +68,24 @@ func (e *executorCache) submitStart(p *process) {
 	if e.closed {
 		e.mu.Unlock()
 		go p.run()
+		return
+	}
+	jobs := e.claimWorkerLocked()
+	e.mu.Unlock()
+	e.dispatch(p, jobs)
+}
+
+func (e *executorCache) submitCall(p *process) {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		go p.run()
+		return
+	}
+	if e.ready.size != 0 || (e.busy != 0 && len(e.idle) == 0) {
+		e.ready.push(p)
+		e.watchReadyLocked()
+		e.mu.Unlock()
 		return
 	}
 	jobs := e.claimWorkerLocked()
@@ -217,6 +243,9 @@ func (e *executorCache) run(p *process) {
 		p = nil
 		e.mu.Lock()
 		if p = e.ready.pop(); p != nil {
+			if e.ready.size == 0 && e.readyWatched && e.readyTimer.Stop() {
+				e.readyWatched = false
+			}
 			e.mu.Unlock()
 			continue
 		}

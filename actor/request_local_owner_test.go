@@ -3,9 +3,12 @@ package actor
 import (
 	"context"
 	"errors"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"weak"
 )
 
 func TestDefaultLocalPIDCallCompletesWithoutNodeRequestLock(t *testing.T) {
@@ -307,4 +310,288 @@ func TestCallDiagnosticTargetsPreserveAddressStrings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInlineLocalPIDCallLifecycleAndRaces(t *testing.T) {
+	t.Run("snapshot-and-defer-promotion", func(t *testing.T) {
+		n := testNode(t, NodeOptions{CallTimeout: time.Minute})
+		entered, release := make(chan struct{}), make(chan struct{})
+		tickets := make(chan DeferredReply, 1)
+		pid := spawn(t, n, factory(func(a *testBehavior, message any) error {
+			switch message {
+			case "hold":
+				close(entered)
+				<-release
+				return a.Reply(7)
+			case "defer":
+				tickets <- a.Defer()
+			case "noreply":
+				return nil
+			}
+			return nil
+		}))
+		holdRes := make(chan error, 1)
+		go func() {
+			v, err := n.Call[int](context.Background(), pid, "hold")
+			if err == nil && v != 7 {
+				err = errors.New("unexpected hold reply")
+			}
+			holdRes <- err
+		}()
+		signal(t, entered)
+		view, err := n.Snapshot(SnapshotOptions{})
+		if err != nil || view.CallsTotal != 1 || len(view.Calls) != 1 || view.Calls[0].Owner != pid.String() {
+			t.Fatalf("unpromoted inline snapshot: %+v %v", view, err)
+		}
+		close(release)
+		if err := <-holdRes; err != nil {
+			t.Fatal(err)
+		}
+
+		deferRes := make(chan error, 1)
+		go func() {
+			v, err := n.Call[int](context.Background(), pid, "defer")
+			if err == nil && v != 42 {
+				err = errors.New("unexpected deferred reply")
+			}
+			deferRes <- err
+		}()
+		ticket := <-tickets
+		if ticket.request.actorRequests() == nil {
+			t.Fatal("Defer did not promote inline PID Call to actorRequests")
+		}
+		view, err = n.Snapshot(SnapshotOptions{})
+		if err != nil || view.CallsTotal != 1 || len(view.Calls) != 1 || !view.Calls[0].Deferred {
+			t.Fatalf("promoted inline snapshot: %+v %v", view, err)
+		}
+		if err := ticket.Reply(42); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-deferRes; err != nil {
+			t.Fatal(err)
+		}
+		if err := ticket.Reply(43); !errors.Is(err, ErrAlreadyReplied) {
+			t.Fatalf("second deferred reply: %v", err)
+		}
+		if _, err := n.Call[int](context.Background(), pid, "noreply"); !errors.Is(err, ErrNoReply) {
+			t.Fatalf("inline no-reply: %v", err)
+		}
+		if n.Stats().PendingCalls != 0 {
+			t.Fatalf("pending calls leaked: %d", n.Stats().PendingCalls)
+		}
+	})
+
+	t.Run("timeout-and-crash-stop-races", func(t *testing.T) {
+		expiredReply := make(chan error, 1)
+		expireNode := testNode(t, NodeOptions{CallTimeout: 2 * time.Millisecond})
+		expirePID := spawn(t, expireNode, factory(func(a *testBehavior, message any) error {
+			if message == "slow" {
+				<-a.Context().Done()
+				expiredReply <- a.Reply(1)
+			}
+			return nil
+		}))
+		if _, err := expireNode.Call[int](context.Background(), expirePID, "slow"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expired inline Call got %v, want DeadlineExceeded", err)
+		}
+		if err := <-expiredReply; !errors.Is(err, ErrReplyExpired) {
+			t.Fatalf("late inline Reply got %v, want ErrReplyExpired", err)
+		}
+		if expireNode.Stats().PendingCalls != 0 {
+			t.Fatalf("expired inline Call leaked quota: %d", expireNode.Stats().PendingCalls)
+		}
+
+		raceNode := testNode(t, NodeOptions{CallTimeout: time.Nanosecond})
+		racePID := spawn(t, raceNode, factory(func(a *testBehavior, message any) error {
+			if message == "ping" {
+				_ = a.Reply(1)
+			}
+			return nil
+		}))
+		for range 100 {
+			v, err := raceNode.Call[int](context.Background(), racePID, "ping")
+			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("tight timeout Call got %v, want nil or DeadlineExceeded", err)
+			}
+			if err == nil && v != 1 {
+				t.Fatalf("tight timeout Call got %d, want 1", v)
+			}
+		}
+		eventually(t, func() bool { return raceNode.Stats().PendingCalls == 0 })
+
+		boom := errors.New("boom")
+		for range 50 {
+			n := testNode(t, NodeOptions{CallTimeout: time.Minute})
+			pid := spawn(t, n, factory(func(a *testBehavior, message any) error {
+				switch message {
+				case "crash":
+					return boom
+				case "defer":
+					_ = a.Defer()
+				case "ok":
+					return a.Reply(1)
+				}
+				return nil
+			}), WithRestart(Temporary))
+			var wg sync.WaitGroup
+			for _, msg := range []string{"ok", "defer", "crash", "ok"} {
+				wg.Go(func() {
+					_, err := n.Call[int](context.Background(), pid, msg)
+					if err != nil && !errors.Is(err, boom) && !errors.Is(err, ErrStopped) && !errors.Is(err, ErrNoProcess) {
+						t.Errorf("unexpected race error for %s: %v", msg, err)
+					}
+				})
+			}
+			wg.Go(func() { _, _ = n.Snapshot(SnapshotOptions{}) })
+			wg.Wait()
+			eventually(t, func() bool { return n.Stats().PendingCalls == 0 })
+		}
+	})
+
+	t.Run("late-reply-preserves-deadline-cause", func(t *testing.T) {
+		n := testNode(t, NodeOptions{})
+		pid := spawn(t, n, factory(func(*testBehavior, any) error { return nil }))
+		p, _, err := n.resolve(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, inline := range []bool{false, true} {
+			state := &localCallState{
+				request: request{inline: inline, node: n, owner: pid, kind: requestActorPID},
+				scope:   requestScope{parent: context.Background(), deadline: time.Now().Add(-time.Second), hasDeadline: true},
+			}
+			r, scope := &state.request, &state.scope
+			if inline {
+				if err := n.reservePendingCall(); err != nil {
+					t.Fatal(err)
+				}
+				r.ctx = scope
+				scope.request = r
+				scope.actorProc.Store(p)
+			} else if err := p.registerActorRequest(r, scope, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := n.reply(r, pid, "late", nil, false); !errors.Is(err, ErrReplyExpired) {
+				t.Fatalf("inline=%t late Reply = %v", inline, err)
+			}
+			if !errors.Is(r.err, context.DeadlineExceeded) {
+				t.Fatalf("inline=%t Call result = %v", inline, r.err)
+			}
+			ctx := scope.context()
+			if ctx.Err() != context.DeadlineExceeded || context.Cause(ctx) != context.DeadlineExceeded {
+				t.Fatalf("inline=%t Call timed out but handler Context reports Err=%v, Cause=%v", inline, ctx.Err(), context.Cause(ctx))
+			}
+		}
+	})
+
+	t.Run("default-call-timer-uses-remaining-budget", func(t *testing.T) {
+		const budget = 250 * time.Millisecond
+		n := testNode(t, NodeOptions{CallTimeout: budget})
+		n.EnableDiagnostics()
+		entered, release := make(chan struct{}), make(chan struct{})
+		defer close(release)
+		pid := spawn(t, n, factory(func(a *testBehavior, msg any) error {
+			if msg == "block" {
+				close(entered)
+				<-release
+			}
+			if msg == "call" {
+				_ = a.Reply(1)
+			}
+			return nil
+		}))
+		if err := n.Send(pid, "block"); err != nil {
+			t.Fatal(err)
+		}
+		signal(t, entered)
+		p, _, _ := n.resolve(pid)
+		owner, err := p.requestOwner()
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner.mu.Lock()
+		unlock := sync.OnceFunc(owner.mu.Unlock)
+		defer unlock()
+		result := make(chan error, 1)
+		go func() { _, err := n.Call[int](context.Background(), pid, "call"); result <- err }()
+		waitUntil := time.Now().Add(2 * time.Second)
+		for {
+			stack := make([]byte, 1<<16)
+			count := runtime.Stack(stack, true)
+			if strings.Contains(string(stack[:count]), ").registerActorRequest(") {
+				break
+			}
+			if time.Now().After(waitUntil) {
+				t.Fatal("Call did not reach request registration")
+			}
+			runtime.Gosched()
+		}
+		<-time.After(2 * budget)
+		releasedAt := time.Now()
+		unlock()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Call = %v", err)
+			}
+			if elapsed := time.Since(releasedAt); elapsed >= budget/2 {
+				t.Fatalf("admission consumed the deadline, but Call waited another %s after admission resumed", elapsed)
+			}
+		case <-time.After(2 * budget):
+			t.Fatal("Call never completed after admission resumed")
+		}
+	})
+
+	t.Run("deferred-ticket-and-context-release-retired-process", func(t *testing.T) {
+		for _, diag := range []bool{false, true} {
+			n := testNode(t, NodeOptions{CallTimeout: time.Minute})
+			if diag {
+				n.EnableDiagnostics()
+			}
+			ticket, ctx, procRef, behRef := spawnStoppedDeferredWithRefs(t, n)
+			for range 5 {
+				runtime.GC()
+				runtime.Gosched()
+			}
+			if procRef.Value() != nil || behRef.Value() != nil {
+				t.Fatalf("diagnostics=%t expired DeferredReply/Context still retains retired process (%v) or behavior (%v)",
+					diag, procRef.Value() != nil, behRef.Value() != nil)
+			}
+			runtime.KeepAlive(ticket)
+			runtime.KeepAlive(ctx)
+		}
+	})
+}
+
+func spawnStoppedDeferredWithRefs(t *testing.T, n *Node) (DeferredReply, context.Context, weak.Pointer[process], weak.Pointer[testBehavior]) {
+	t.Helper()
+	type held struct {
+		ticket DeferredReply
+		ctx    context.Context
+	}
+	tickets := make(chan held, 1)
+	var behRef weak.Pointer[testBehavior]
+	pid := spawn(t, n, func() Behavior {
+		b := &testBehavior{receive: func(a *testBehavior, msg any) error {
+			if msg == "defer" {
+				tickets <- held{ticket: a.Defer(), ctx: a.Context()}
+			}
+			return nil
+		}}
+		behRef = weak.Make(b)
+		return b
+	}, WithRestart(Temporary))
+	p, _, _ := n.resolve(pid)
+	procRef := weak.Make(p)
+	p = nil
+	result := make(chan error, 1)
+	go func() { _, err := n.Call[int](context.Background(), pid, "defer"); result <- err }()
+	got := <-tickets
+	if err := n.StopActor(t.Context(), pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, ErrStopped) {
+		t.Fatalf("stopped call = %v", err)
+	}
+	return got.ticket, got.ctx, procRef, behRef
 }

@@ -43,7 +43,9 @@ type Node struct {
 	draining       bool
 	nextPID        atomic.Uint64
 	nextRequest    atomic.Uint64
+	_              [64]byte
 	pendingCalls   atomic.Int64 // all local, incoming and outgoing requests share one quota
+	_              [56]byte
 	asyncPending   atomic.Int64 // Request operations and queued results, independently bounded
 	nextAsync      uint64       // mu; local correlation IDs never wrap
 	asyncWorkers   sync.WaitGroup
