@@ -65,6 +65,10 @@ Apply the same check to `DeferredReply.Reply` / `ReplyError`. Duplicate replies 
 
 `Stop` cancels in-flight requests and discards unconsumed results. `Replace` and `Handoff` return `ErrAsyncPending` if any async request is still running or awaiting consumption. See `ExampleActor_Request` in [example_test.go](../actor/example_test.go) and the async bridge in the [Soak Example](../actor/examples/soak/main.go).
 
+### Ordered Local Call Admission (`BeginCall`)
+
+`Node.BeginCall(ctx, targetPID, message, complete)` synchronously admits a call into a concrete local `PID`'s mailbox without blocking on `Receive` execution, invoking `complete(CallCompletion)` once outside runtime locks when the call settles (`CompletionReply`, `CompletionNoReply`, `CompletionCanceled`, or `CompletionTargetExit`). Unlike `Node.Call`, `BeginCall` honors `ctx`'s exact deadline (without applying `CallTimeout` when `ctx` has none) and tracks parent context cancellation continuously, enabling external protocol adapters such as [`actor/erlang`](../actor/erlang/README.md) to preserve per-peer `cast`/`call` arrival order.
+
 ## Supervision & Lifecycle Observation
 
 The default supervision policy is `OneForOne` with `Permanent` children, alongside `OneForAll`, `RestForOne`, `Transient`, and `Temporary`. Explicit `StopActor`, parent shutdown, and supervisor-initiated shutdown do not trigger `Permanent` restarts.

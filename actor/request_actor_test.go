@@ -15,7 +15,7 @@ func TestActorRequestReplyCancelStopHaveOneCompletion(t *testing.T) {
 	for range 100 {
 		pid := spawn(t, n, factory(func(*testBehavior, any) error { return nil }), WithRestart(Temporary))
 		p, _, _ := n.resolve(pid)
-		state := &incomingRequestState{scope: requestScope{parent: n.network.ctx, deadline: time.Now().Add(time.Hour)}}
+		state := &incomingRequestState{scope: requestScope{parent: n.network.ctx, deadline: time.Now().Add(time.Hour), hasDeadline: true}}
 		r, err := n.network.registerActorRequest(&state.request, p, &state.scope, requestKey{Caller: "peer", ID: 1}, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -58,7 +58,7 @@ func TestActorRequestFirstAdmissionRacesStop(t *testing.T) {
 	for range 100 {
 		pid := spawn(t, n, factory(func(*testBehavior, any) error { return nil }))
 		p, _, _ := n.resolve(pid)
-		state := &incomingRequestState{scope: requestScope{parent: n.network.ctx, deadline: time.Now().Add(time.Hour)}}
+		state := &incomingRequestState{scope: requestScope{parent: n.network.ctx, deadline: time.Now().Add(time.Hour), hasDeadline: true}}
 		start := make(chan struct{})
 		var r *request
 		var err error

@@ -11,6 +11,7 @@ Its underlying networking layer, **[taonet](taonet/README.md)**, is a standalone
 - **Multi-Node & State Handoff**: Remote actor messaging over `taonet`, stable logical addressing (`Ref`), optional CAS-backed [etcd Directory](actor/etcd/README.md), in-place behavior hot-upgrade (`Replace`), and cross-node state migration (`Handoff`).
 - **taonet**: Pure Go standard-library transport featuring a custom `HN-MUX/1` multiplexer, mutual TLS 1.3, traffic class isolation, credit-based backpressure, and explicit delivery receipts (`NotSent`, `Rejected`, `Responded`, `Unknown`).
 - **Web Observer**: Optional embedded read-only [Web UI](actor/observer/README.md) for inspecting supervision trees, mailboxes, in-flight requests, and actor state.
+- **Erlang/OTP Interoperability**: Standalone pure-Go [Erlang distribution v6](erlang/README.md) and [Tao Actor adapter](actor/erlang/README.md) for direct `gen_server` / `GenServer` messaging, monitors, and links without a BEAM sidecar.
 
 ## Modules
 
@@ -20,6 +21,8 @@ This repository uses a Go workspace (`go.work`) to manage multiple independent m
 | :--- | :--- | :--- | :--- |
 | [actor](actor/README.md) | `github.com/sllt/tao/actor` | 1.27 | Core Actor runtime, supervision, and remote adapter |
 | [taonet](taonet/README.md) | `github.com/sllt/tao/taonet` | 1.26 | Zero-dependency multiplexed transport |
+| [erlang](erlang/README.md) | `github.com/sllt/tao/erlang` | 1.26 | Zero-dependency Erlang distribution v6 & ETF |
+| [actor/erlang](actor/erlang/README.md) | `github.com/sllt/tao/actor/erlang` | 1.27 | Optional Tao Actor adapter for Erlang `gen_server` interop |
 | [actor/etcd](actor/etcd/README.md) | `github.com/sllt/tao/actor/etcd` | 1.27 | Optional etcd CAS directory for global `Ref` ownership |
 | [actor/codec/protobuf](actor/codec/protobuf/README.md) | `github.com/sllt/tao/actor/codec/protobuf` | 1.27 | Optional Protobuf message codec for remote actors |
 
@@ -67,6 +70,8 @@ Run from the repository root:
 | In-Place Behavior Upgrade | `go run ./actor/examples/replace` |
 | Cross-Node State Handoff | `go run ./actor/examples/handoff` |
 | Embedded Web Observer | `go run ./actor/examples/observer` |
+| Erlang Distribution `gen_server` | `go run ./erlang/examples/genserver-call` |
+| Tao Actor <-> Erlang Bridge | `go run ./actor/erlang/examples/bridge` |
 | HTTP Service + Observer | [HTTP API Example](actor/examples/http-api/README.md) |
 | Soak & Fault Recovery | [Soak Example](actor/examples/soak/README.md) |
 

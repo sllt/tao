@@ -761,7 +761,7 @@ func (w *network) admitInbox(ctx context.Context, peer taonet.Peer, scope wireSc
 	deadline := time.Now().Add(time.Duration(packet.BudgetMS) * time.Millisecond)
 	// Prepare heap-owned scope/request/callback storage before the network
 	// lock. Admission and CANCEL bookkeeping still commit together below.
-	state := &incomingRequestState{scope: requestScope{parent: w.ctx, deadline: deadline}}
+	state := &incomingRequestState{scope: requestScope{parent: w.ctx, deadline: deadline, hasDeadline: true}}
 	budget, prepared := &state.scope, &state.request
 	incoming := incomingCall{budget: budget, scope: scope, sequence: packet.Sequence}
 	w.mu.Lock()

@@ -12,34 +12,60 @@ import (
 // a standard context and transfers deadline notification to its AfterFunc, so
 // children, values, Cause and cancellation retain standard-library behavior.
 type requestScope struct {
-	actorOwner    *actorRequests // ordinary PID completion domain; node is available through request
-	request       *request
-	outgoing      *outgoingCall // immutable before start; nil for local/incoming Calls
-	parent        context.Context
-	deadline      time.Time
-	mu            sync.Mutex
-	reason        atomic.Uint32 // 0 active, 1 canceled, 2 deadline exceeded
-	materialized  atomic.Pointer[context.Context]
-	timer         *requestTimer
+	actorOwner   *actorRequests // ordinary PID completion domain; node is available through request
+	request      *request
+	outgoing     *outgoingCall // immutable before start; nil for local/incoming Calls
+	parent       context.Context
+	deadline     time.Time
+	hasDeadline  bool
+	callerTimer  bool // synchronous local PID caller reclaims the timer after receiving its result
+	mu           sync.Mutex
+	reason       atomic.Uint32 // 0 active, 1 canceled, 2 deadline exceeded
+	materialized atomic.Pointer[requestScopeCallbacks]
+	timer        *requestTimer
+	callbacks    *requestScopeCallbacks // mu; allocated only for a public Context or a watched parent
+	canceled     chan struct{}          // mu; private transport waiter, independent of public Context
+	cause        error                  // mu; first completion's context cause
+}
+
+type requestScopeCallbacks struct {
+	ctx           context.Context // immutable after materialized publishes this object
 	cancelContext context.CancelFunc
+	cancelCause   context.CancelCauseFunc
+	stopParent    func() bool
 	stopContext   func() bool
-	canceled      chan struct{} // mu; private transport waiter, independent of public Context
-	cause         error         // mu; first completion's context cause
+}
+
+func (s *requestScope) callbacksLocked() *requestScopeCallbacks {
+	if s.callbacks == nil {
+		s.callbacks = &requestScopeCallbacks{}
+	}
+	return s.callbacks
 }
 
 func newRequestScope(parent context.Context, deadline time.Time) *requestScope {
 	if earlier, ok := parent.Deadline(); ok && earlier.Before(deadline) {
 		deadline = earlier
 	}
-	return &requestScope{parent: parent, deadline: deadline}
+	return &requestScope{parent: parent, deadline: deadline, hasDeadline: true}
+}
+
+func newContextRequestScope(parent context.Context) requestScope {
+	deadline, hasDeadline := parent.Deadline()
+	return requestScope{parent: parent, deadline: deadline, hasDeadline: hasDeadline}
 }
 
 // The private request slot can hold a scope without growing every local and
 // outgoing request. Public Actor.Context returns context(), a standard context.
-func (s *requestScope) Deadline() (time.Time, bool) { return s.deadline, true }
-func (s *requestScope) Done() <-chan struct{}       { return s.context().Done() }
-func (s *requestScope) Err() error                  { return s.err() }
-func (s *requestScope) Value(key any) any           { return s.context().Value(key) }
+func (s *requestScope) Deadline() (time.Time, bool) {
+	if !s.hasDeadline {
+		return time.Time{}, false
+	}
+	return s.deadline, true
+}
+func (s *requestScope) Done() <-chan struct{} { return s.context().Done() }
+func (s *requestScope) Err() error            { return s.err() }
+func (s *requestScope) Value(key any) any     { return s.context().Value(key) }
 
 // Transport waiters need cancellation, not the full public context tree. Only
 // callers using the scope's own timer use this signal; caller-supplied contexts
@@ -64,12 +90,12 @@ func (s *requestScope) err() error {
 		return context.DeadlineExceeded
 	}
 	if ctx := s.materialized.Load(); ctx != nil {
-		return (*ctx).Err()
+		return ctx.ctx.Err()
 	}
 	if err := s.parent.Err(); err != nil {
 		return err
 	}
-	if time.Until(s.deadline) <= 0 {
+	if s.hasDeadline && time.Until(s.deadline) <= 0 {
 		return context.DeadlineExceeded
 	}
 	return nil
@@ -78,22 +104,36 @@ func (s *requestScope) err() error {
 func (s *requestScope) start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.reason.Load() == 0 && s.materialized.Load() == nil {
+	if s.hasDeadline && s.reason.Load() == 0 && s.materialized.Load() == nil {
 		s.timer = s.request.node.startRequestTimer(s, time.Until(s.deadline))
+	}
+}
+
+func (s *requestScope) startWatched() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reason.Load() != 0 || s.materialized.Load() != nil {
+		return
+	}
+	if s.hasDeadline {
+		s.timer = s.request.node.startRequestTimer(s, time.Until(s.deadline))
+	}
+	if s.parent.Done() != nil {
+		s.callbacksLocked().stopParent = context.AfterFunc(s.parent, s.parentDone)
 	}
 }
 
 func (s *requestScope) complete(reason error, timerSource bool) bool {
 	s.mu.Lock()
-	if s.reason.Load() != 0 || timerSource && s.materialized.Load() != nil {
+	if s.reason.Load() != 0 || timerSource && (!s.hasDeadline || s.materialized.Load() != nil) {
 		s.mu.Unlock()
 		return false
 	}
 	cause := reason
 	if ctx := s.materialized.Load(); ctx != nil {
-		if err := (*ctx).Err(); err != nil {
+		if err := ctx.ctx.Err(); err != nil {
 			reason = err
-			cause = context.Cause(*ctx)
+			cause = context.Cause(ctx.ctx)
 		}
 	} else if err := s.parent.Err(); err != nil {
 		reason = err
@@ -108,20 +148,42 @@ func (s *requestScope) complete(reason error, timerSource bool) bool {
 	if s.canceled != nil {
 		close(s.canceled)
 	}
+	if s.timer != nil && !s.callerTimer {
+		s.request.node.stopRequestTimer(s.timer)
+		s.timer = nil
+	}
+	if s.callbacks == nil {
+		s.mu.Unlock()
+		return true
+	}
+	callbacks := *s.callbacks
+	s.callbacks.stopParent, s.callbacks.stopContext = nil, nil
+	s.callbacks.cancelContext, s.callbacks.cancelCause = nil, nil
+	s.mu.Unlock()
+	if callbacks.stopParent != nil {
+		callbacks.stopParent()
+	}
+	if callbacks.stopContext != nil {
+		callbacks.stopContext()
+	}
+	if callbacks.cancelCause != nil {
+		callbacks.cancelCause(cause)
+	}
+	if callbacks.cancelContext != nil {
+		callbacks.cancelContext()
+	}
+	return true
+}
+
+// The caller owns this cleanup even when Reply/Stop is still returning from
+// finish. Public Context may already have taken over the deadline under mu.
+func (s *requestScope) releaseCallerTimer() {
+	s.mu.Lock()
 	if s.timer != nil {
 		s.request.node.stopRequestTimer(s.timer)
 		s.timer = nil
 	}
-	stop, cancel := s.stopContext, s.cancelContext
-	s.stopContext = nil
 	s.mu.Unlock()
-	if stop != nil {
-		stop()
-	}
-	if cancel != nil {
-		cancel()
-	}
-	return true
 }
 
 func (s *requestScope) timeout() {
@@ -130,9 +192,15 @@ func (s *requestScope) timeout() {
 	}
 }
 
+func (s *requestScope) parentDone() {
+	if s.complete(s.parent.Err(), false) {
+		s.expire()
+	}
+}
+
 func (s *requestScope) contextDone() {
 	ctx := s.materialized.Load()
-	if s.complete((*ctx).Err(), false) {
+	if s.complete(ctx.ctx.Err(), false) {
 		s.expire()
 	}
 }
@@ -169,34 +237,53 @@ func (s *requestScope) cancel() {
 
 func (s *requestScope) context() context.Context {
 	if ctx := s.materialized.Load(); ctx != nil {
-		return *ctx
+		return ctx.ctx
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctx := s.materialized.Load(); ctx != nil {
-		return *ctx
+		return ctx.ctx
 	}
 	parent := s.parent
 	state := s.reason.Load()
-	if state != 0 {
-		// A later node cancellation must not replace this request's already
-		// committed reason. Values remain available after completion.
-		parent = context.WithoutCancel(parent)
-		if state == 1 {
-			var cancel context.CancelCauseFunc
-			parent, cancel = context.WithCancelCause(parent)
-			cancel(s.cause)
+	callbacks := s.callbacksLocked()
+	var ctx context.Context
+	if !s.hasDeadline {
+		if state != 0 {
+			parent = context.WithoutCancel(parent)
+			var cancelCause context.CancelCauseFunc
+			ctx, cancelCause = context.WithCancelCause(parent)
+			cancelCause(s.cause)
+		} else {
+			ctx, callbacks.cancelCause = context.WithCancelCause(parent)
 		}
+	} else {
+		if state != 0 {
+			// A later node cancellation must not replace this request's already
+			// committed reason. Values remain available after completion.
+			parent = context.WithoutCancel(parent)
+			if state == 1 {
+				var cancel context.CancelCauseFunc
+				parent, cancel = context.WithCancelCause(parent)
+				cancel(s.cause)
+			}
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadlineCause(parent, s.deadline, s.cause)
+		callbacks.cancelContext = cancel
 	}
-	ctx, cancel := context.WithDeadlineCause(parent, s.deadline, s.cause)
-	s.cancelContext = cancel
-	s.materialized.Store(&ctx)
+	callbacks.ctx = ctx
+	s.materialized.Store(callbacks)
 	if s.timer != nil {
 		s.request.node.stopRequestTimer(s.timer)
 		s.timer = nil
 	}
+	if callbacks.stopParent != nil {
+		callbacks.stopParent()
+		callbacks.stopParent = nil
+	}
 	if state == 0 {
-		s.stopContext = context.AfterFunc(ctx, s.contextDone)
+		callbacks.stopContext = context.AfterFunc(ctx, s.contextDone)
 	}
 	return ctx
 }

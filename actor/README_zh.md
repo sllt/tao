@@ -74,6 +74,7 @@ func run() error {
 | 创建实例 | `Node.Spawn` / `Actor.Spawn` | 等待 `Started` 完成后返回 `PID` |
 | 单向消息 | `Node.Send` / `Actor.Send` | 返回准入或投递错误，不等待业务完成 |
 | 同步请求 | `Node.Call[T]` / `Actor.CallAs[T]` | 返回类型化结果和错误 |
+| 有序调用准入 | `Node.BeginCall` | 同步完成具体本地 `PID` 邮箱准入，通过无阻塞回调发布 `CallCompletion` |
 | 异步请求 | `Actor.Request` | 返回 `RequestID`，后续在 `Receive` 中处理 `CallResult` |
 | 回复 | `Reply` / `ReplyError` | 向当前调用者返回业务结果或业务拒绝 |
 | 延后回复 | `Defer` | 返回可在外部 goroutine 或后续消息中使用的一次性回复凭据 |
@@ -105,6 +106,7 @@ func run() error {
 | [Web Observer](observer/README_zh.md) | 监督树、邮箱与状态检查 |
 | [etcd Directory](etcd/README_zh.md) | 跨节点逻辑地址与所有权 |
 | [Protobuf Codec](codec/protobuf/README_zh.md) | 可选业务消息编码 |
+| [Erlang 适配器](erlang/README_zh.md) | 原生 Erlang/OTP distribution v6 与 `gen_server` 消息互通 |
 | [持续负载（Soak）](examples/soak/README_zh.md) | 混合调用与故障恢复验证 |
 
 ## 测试与许可

@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-克隆仓库后使用 Go 1.27.3 工具链。根目录的 `go.work` 包含 `actor`、`taonet`、`actor/etcd` 和 `actor/codec/protobuf` 四个模块，便于统一开发与联调。
+克隆仓库后使用 Go 1.27.3 工具链。根目录的 `go.work` 包含 `actor`、`taonet`、`erlang`、`actor/erlang`、`actor/etcd` 和 `actor/codec/protobuf` 六个模块，便于统一开发与联调。
 
 ```sh
 git clone https://github.com/sllt/tao.git
@@ -22,8 +22,10 @@ go run ./actor/examples/counter
 | `actor/observer/` | 可选 Web Observer |
 | `actor/etcd/` | 独立 etcd Directory 模块 |
 | `actor/codec/protobuf/` | 独立 Protobuf codec 模块 |
+| `actor/erlang/` | 独立 Tao Actor 与 Erlang/OTP distribution v6 适配模块 |
+| `erlang/` | 仅依赖标准库的 Erlang distribution v6 与 ETF 编解码模块 |
 | `taonet/` | 仅依赖标准库的通信层与内部 mux |
-| `actor/examples/`、`taonet/examples/` | 可运行示例 |
+| `actor/examples/`、`taonet/examples/`、`erlang/examples/`、`actor/erlang/examples/` | 可运行示例 |
 | `docs/` | 使用指南 |
 
 ## 修改原则
@@ -39,7 +41,7 @@ go run ./actor/examples/counter
 在仓库根目录测试整个工作区：
 
 ```sh
-go test ./actor/... ./taonet/... ./actor/etcd/... ./actor/codec/protobuf/...
+go test ./actor/... ./taonet/... ./erlang/... ./actor/erlang/... ./actor/etcd/... ./actor/codec/protobuf/...
 ```
 
 也可以从对应模块独立运行测试，验证不使用工作区时的依赖解析：
@@ -47,6 +49,8 @@ go test ./actor/... ./taonet/... ./actor/etcd/... ./actor/codec/protobuf/...
 ```sh
 (cd actor && GOWORK=off go test ./...)
 (cd taonet && GOWORK=off go test ./...)
+(cd erlang && GOWORK=off go test ./...)
+(cd actor/erlang && GOWORK=off go test ./...)
 (cd actor/etcd && GOWORK=off go test ./...)
 (cd actor/codec/protobuf && GOWORK=off go test ./...)
 ```

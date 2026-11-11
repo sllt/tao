@@ -21,9 +21,10 @@ type request struct {
 	callerDone                   chan struct{} // private cached result signal; immutable
 	value                        any
 	err                          error
-	kind                         requestKind // immutable completion domain
-	completed, expired, deferred bool        // owning registry lock
-	settled                      atomic.Bool // publishes the result to completion hooks and the executor
+	kind                         requestKind      // immutable completion domain
+	origin                       CompletionOrigin // owning registry lock
+	completed, expired, deferred bool             // owning registry lock
+	settled                      atomic.Bool      // publishes the result to completion hooks and the executor
 	completion                   atomic.Pointer[requestCompletion]
 }
 
@@ -134,6 +135,16 @@ func (r *request) bindCompletion(hook *requestCompletion) bool {
 }
 
 func (r *request) finish() {
+	if r.kind == requestActorPID {
+		// Only the successful commit reaches finish. waitDoneLocked never
+		// attaches a new broadcast channel after completed is published.
+		if r.done != nil {
+			close(r.done)
+		}
+		if r.callerDone != nil {
+			r.callerDone <- struct{}{}
+		}
+	}
 	if hook := r.completion.Swap(nil); hook != nil {
 		hook.run(r)
 	}
@@ -224,7 +235,7 @@ func (n *Node) callLocalPID(ctx context.Context, to PID, msg any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &localCallState{scope: requestScope{parent: ctx, deadline: deadline}}
+	state := &localCallState{scope: requestScope{parent: ctx, deadline: deadline, hasDeadline: true, callerTimer: true}}
 	r, scope := &state.request, &state.scope
 	done := n.takeCallSignal()
 	defer n.recycleCallSignal(done)
@@ -238,6 +249,7 @@ func (n *Node) callLocalPID(ctx context.Context, to PID, msg any) (any, error) {
 		_ = n.reply(r, p.pid, nil, err, true)
 	}
 	<-done
+	scope.releaseCallerTimer()
 	return r.value, r.err
 }
 
@@ -246,7 +258,7 @@ func (n *Node) callLocal(ctx context.Context, cancel context.CancelFunc, to Addr
 	var scope *requestScope
 	var done chan struct{}
 	if managed {
-		state := &localCallState{scope: requestScope{parent: ctx, deadline: time.Now().Add(n.opts.CallTimeout)}}
+		state := &localCallState{scope: requestScope{parent: ctx, deadline: time.Now().Add(n.opts.CallTimeout), hasDeadline: true}}
 		r, scope = &state.request, &state.scope
 		done = n.takeCallSignal()
 		defer n.recycleCallSignal(done)
@@ -309,6 +321,13 @@ func (n *Node) callLocal(ctx context.Context, cancel context.CancelFunc, to Addr
 		}
 	}
 	return r.value, r.err
+}
+
+func (n *Node) noReply(r *request, owner PID) error {
+	if domain := r.actorRequests(); domain != nil {
+		return domain.replyWithOrigin(r, owner, nil, ErrNoReply, true, NoReply)
+	}
+	return n.reply(r, owner, nil, ErrNoReply, true)
 }
 
 func (n *Node) reply(r *request, owner PID, value any, err error, expired bool) error {

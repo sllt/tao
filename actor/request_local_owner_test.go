@@ -121,7 +121,7 @@ func TestDefaultLocalPIDFirstCallRacesStop(t *testing.T) {
 		}
 		// The resolver can have returned p just before Stop. Such an in-flight
 		// registrar must still join the same closed publication protocol.
-		state := &localCallState{scope: requestScope{parent: context.Background(), deadline: time.Now().Add(time.Minute)}}
+		state := &localCallState{scope: requestScope{parent: context.Background(), deadline: time.Now().Add(time.Minute), hasDeadline: true}}
 		if err := p.registerActorRequest(&state.request, &state.scope, nil); !errors.Is(err, ErrStopped) {
 			t.Fatalf("resolved retired PID admitted a request: %v", err)
 		}
@@ -214,7 +214,12 @@ func TestDefaultLocalPIDCallSharesQuotaWithRefIncomingAndOutgoing(t *testing.T) 
 			}
 			results <- err
 		}()
-		held = append(held, <-tickets)
+		select {
+		case ticket := <-tickets:
+			held = append(held, ticket)
+		case err := <-results:
+			t.Fatalf("request %d (%s -> %v) completed before Defer: %v", len(held), call.node.Name(), call.to, err)
+		}
 	}
 	view, err := server.Snapshot(SnapshotOptions{})
 	if err != nil || view.CallsTotal != 4 || len(view.Calls) != 4 {

@@ -65,6 +65,10 @@ return err
 
 `Stop` 取消运行项并丢弃未消费结果。`Replace` / `Handoff` 遇到运行中或未消费的结果返回 `ErrAsyncPending`。可执行的 `A->B->A` 示例见 [example_test.go](../actor/example_test.go)，[持续负载示例](../actor/examples/soak/main.go) 的 bridge 演示了 `Defer`、`Request` 和 `CallResult` 的组合。
 
+### 有序本地调用准入（`BeginCall`）
+
+`Node.BeginCall(ctx, targetPID, message, complete)` 面向具体本地 `PID` 同步完成配额检查、请求登记与邮箱入队后立即返回，并在锁外通过 `complete(CallCompletion)` 一次性发布完成结果（`CompletionReply`、`CompletionNoReply`、`CompletionCanceled` 或 `CompletionTargetExit`）。`BeginCall` 原样遵循传入 `ctx` 的期限（无 deadline 时不自动附加 `CallTimeout`）并持续监听父 context 取消，供 [`actor/erlang`](../actor/erlang/README_zh.md) 等外部协议适配层严格保持同一连接上的 `cast`/`call` 入队顺序。
+
 ## 监督与生命周期观察
 
 默认策略为 `OneForOne` / `Permanent`，也支持 `OneForAll`、`RestForOne` 和 `Transient` / `Temporary`。显式 `StopActor`、父级关闭和监督策略停止不会触发额外的 `Permanent` 重启。

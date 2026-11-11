@@ -31,3 +31,4 @@ go.work.sum
 /docs/development_notes.md
 /docs/taonet_protocol_design.md
 /docs/taonet_mux_design.md
+/docs/erlang_interop_design_zh.md

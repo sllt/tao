@@ -11,6 +11,7 @@
 - **多节点与状态交接**：基于 `taonet` 的远程调用、稳定逻辑地址（`Ref`）、可选基于 CAS 的 [etcd Directory](actor/etcd/README_zh.md)，以及叶子 Actor 的本地热替换（`Replace`）与跨节点迁移（`Handoff`）。
 - **taonet**：仅依赖 Go 标准库，内置自有 `HN-MUX/1` 多路复用、双向 TLS 1.3、流量分类隔离、窗口背压与明确的投递回执（`NotSent`、`Rejected`、`Responded`、`Unknown`）。
 - **Web Observer**：可选的嵌入式只读 [Web 界面](actor/observer/README_zh.md)，用于查看监督树、邮箱、在途请求关系和 Actor 业务状态。
+- **Erlang/OTP 消息互通**：提供零第三方依赖的 [Erlang distribution v6](erlang/README_zh.md) 与 [Tao Actor 适配器](actor/erlang/README_zh.md)，无需 BEAM sidecar 即可直接双向参与 `gen_server` / `GenServer` 调用、monitor 和 link。
 
 ## 模块与环境
 
@@ -20,6 +21,8 @@
 | :--- | :--- | :--- | :--- |
 | [actor](actor/README_zh.md) | `github.com/sllt/tao/actor` | 1.27 | Actor 核心运行时、监督与远程通信适配 |
 | [taonet](taonet/README_zh.md) | `github.com/sllt/tao/taonet` | 1.26 | 零第三方依赖的多路复用通信库 |
+| [erlang](erlang/README_zh.md) | `github.com/sllt/tao/erlang` | 1.26 | 零第三方依赖的 Erlang distribution v6 与 ETF 编解码 |
+| [actor/erlang](actor/erlang/README_zh.md) | `github.com/sllt/tao/actor/erlang` | 1.27 | 可选的 Tao Actor 与 Erlang `gen_server` 适配模块 |
 | [actor/etcd](actor/etcd/README_zh.md) | `github.com/sllt/tao/actor/etcd` | 1.27 | 可选的 etcd Directory 模块 |
 | [actor/codec/protobuf](actor/codec/protobuf/README_zh.md) | `github.com/sllt/tao/actor/codec/protobuf` | 1.27 | 可选的 Protobuf 业务消息编码模块 |
 
@@ -67,6 +70,8 @@ desktop client: hello over one connection
 | 本地行为替换 | `go run ./actor/examples/replace` |
 | 跨节点状态交接 | `go run ./actor/examples/handoff` |
 | Web Observer | `go run ./actor/examples/observer` |
+| Erlang Distribution `gen_server` | `go run ./erlang/examples/genserver-call` |
+| Tao Actor <-> Erlang 桥接 | `go run ./actor/erlang/examples/bridge` |
 | HTTP 服务与 Observer | [HTTP 示例](actor/examples/http-api/README_zh.md) |
 | 持续负载与故障恢复 | [Soak 示例](actor/examples/soak/README_zh.md) |
 

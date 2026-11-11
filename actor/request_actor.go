@@ -1,6 +1,7 @@
 package actor
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -72,14 +73,20 @@ func (p *process) registerActorRequest(r *request, scope *requestScope, sender *
 	return nil
 }
 
-func (owner *actorRequests) commitLocked(r *request, value any, err error, expired bool) {
-	r.value, r.err, r.completed, r.expired = value, err, true, expired
+func (owner *actorRequests) commitLocked(r *request, value any, err error, expired bool, origin CompletionOrigin) {
+	r.value, r.err, r.completed, r.expired, r.origin = value, err, true, expired, origin
 	delete(owner.pending, r.id)
 	r.node.pendingCalls.Add(-1)
-	r.signalDoneLocked()
+	// Publish the value under the owner lock, but wake the caller afterwards.
+	// Its next Call must not immediately contend with the winning publisher.
+	r.settled.Store(true)
 }
 
 func (owner *actorRequests) reply(r *request, pid PID, value any, err error, expired bool) error {
+	return owner.replyWithOrigin(r, pid, value, err, expired, Reply)
+}
+
+func (owner *actorRequests) replyWithOrigin(r *request, pid PID, value any, err error, expired bool, origin CompletionOrigin) error {
 	owner.mu.Lock()
 	if r.completed {
 		wasExpired := r.expired
@@ -95,9 +102,9 @@ func (owner *actorRequests) reply(r *request, pid PID, value any, err error, exp
 	}
 	late := false
 	if cause := r.contextErr(); cause != nil {
-		late, expired, value, err = !expired, true, nil, cause
+		late, expired, value, err, origin = !expired, true, nil, cause, Canceled
 	}
-	owner.commitLocked(r, value, err, expired)
+	owner.commitLocked(r, value, err, expired, origin)
 	owner.mu.Unlock()
 	r.finish()
 	if late {
@@ -112,8 +119,25 @@ func (owner *actorRequests) expire(r *request, err error) bool {
 		owner.mu.Unlock()
 		return false
 	}
-	owner.commitLocked(r, nil, err, true)
+	owner.commitLocked(r, nil, err, true, Canceled)
 	owner.mu.Unlock()
+	r.finish()
+	return true
+}
+
+func (owner *actorRequests) cancel(r *request, scope *requestScope) bool {
+	owner.mu.Lock()
+	if r.completed {
+		owner.mu.Unlock()
+		return false
+	}
+	err := scope.err()
+	if err == nil {
+		err = context.Canceled
+	}
+	owner.commitLocked(r, nil, err, true, Canceled)
+	owner.mu.Unlock()
+	scope.finish()
 	r.finish()
 	return true
 }
@@ -136,11 +160,13 @@ func (p *process) closeActorRequests(reason error) []*request {
 	owner.closed = true
 	var failed []*request
 	for _, r := range owner.pending {
+		origin := TargetExit
 		err := reason
 		if cause := r.contextErr(); cause != nil {
 			err = cause
+			origin = Canceled
 		}
-		owner.commitLocked(r, nil, err, true)
+		owner.commitLocked(r, nil, err, true, origin)
 		failed = append(failed, r)
 	}
 	return failed

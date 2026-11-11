@@ -5,6 +5,8 @@ toolchain go1.27.3
 use (
 	./actor
 	./actor/codec/protobuf
+	./actor/erlang
 	./actor/etcd
+	./erlang
 	./taonet
 )

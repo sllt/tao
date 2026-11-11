@@ -75,6 +75,7 @@ For stateful actors, embed `actor.Actor` in a struct and implement `Receive(any)
 | Spawn instance | `Node.Spawn` / `Actor.Spawn` | Waits for `Started` to complete and returns `PID` |
 | One-way message | `Node.Send` / `Actor.Send` | Returns admission or delivery error; does not wait for handler execution |
 | Synchronous call | `Node.Call[T]` / `Actor.CallAs[T]` | Returns typed result and error |
+| Ordered call admission | `Node.BeginCall` | Admits call to a local `PID` synchronously and delivers `CallCompletion` via non-blocking callback |
 | Asynchronous request | `Actor.Request` | Returns `RequestID`; delivers `CallResult` back to `Receive` |
 | Reply to call | `Reply` / `ReplyError` | Sends business result or error to the active caller |
 | Deferred reply | `Defer` | Returns a single-use `DeferredReply` ticket usable from other goroutines or future turns |
@@ -106,6 +107,7 @@ For full semantics, async request quotas, and migration contracts, see the [Acto
 | [Web Observer](observer/README.md) | Embedded UI for supervision trees, mailboxes, and state inspection |
 | [etcd Directory](etcd/README.md) | Cluster-wide global `Ref` ownership and atomic route handoff |
 | [Protobuf Codec](codec/protobuf/README.md) | Optional Protobuf wire codec for business messages |
+| [Erlang Adapter](erlang/README.md) | Native Erlang/OTP distribution v6 & `gen_server` interoperability |
 | [Soak](examples/soak/README.md) | Continuous mixed load and fault-injection verification |
 
 ## Testing & License

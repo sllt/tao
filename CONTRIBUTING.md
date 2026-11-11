@@ -4,7 +4,7 @@ English | [简体中文](CONTRIBUTING_zh.md)
 
 ## Development Environment
 
-Use the Go 1.27.3 toolchain after cloning the repository. The root `go.work` file links the four modules (`actor`, `taonet`, `actor/etcd`, and `actor/codec/protobuf`) for unified local development.
+Use the Go 1.27.3 toolchain after cloning the repository. The root `go.work` file links the six modules (`actor`, `taonet`, `erlang`, `actor/erlang`, `actor/etcd`, and `actor/codec/protobuf`) for unified local development.
 
 ```sh
 git clone https://github.com/sllt/tao.git
@@ -22,8 +22,10 @@ Each module uses relative `replace` directives pointing to in-repo sibling modul
 | `actor/observer/` | Optional embedded Web Observer |
 | `actor/etcd/` | Standalone etcd Directory module |
 | `actor/codec/protobuf/` | Standalone Protobuf codec module |
+| `actor/erlang/` | Standalone Tao Actor adapter for Erlang/OTP distribution v6 |
+| `erlang/` | Standard-library-only Erlang distribution v6 and ETF module |
 | `taonet/` | Standard-library-only transport layer and `HN-MUX/1` multiplexer |
-| `actor/examples/`, `taonet/examples/` | Runnable examples |
+| `actor/examples/`, `taonet/examples/`, `erlang/examples/`, `actor/erlang/examples/` | Runnable examples |
 | `docs/` | User guides and reference documentation |
 
 ## Design & Modification Principles
@@ -36,10 +38,10 @@ Each module uses relative `replace` directives pointing to in-repo sibling modul
 
 ## Testing
 
-Run all four modules from the workspace root:
+Run all six modules from the workspace root:
 
 ```sh
-go test ./actor/... ./taonet/... ./actor/etcd/... ./actor/codec/protobuf/...
+go test ./actor/... ./taonet/... ./erlang/... ./actor/erlang/... ./actor/etcd/... ./actor/codec/protobuf/...
 ```
 
 Verify each module independently with `GOWORK=off` to ensure module boundaries and `go.mod` dependencies remain self-contained:
@@ -47,6 +49,8 @@ Verify each module independently with `GOWORK=off` to ensure module boundaries a
 ```sh
 (cd actor && GOWORK=off go test ./...)
 (cd taonet && GOWORK=off go test ./...)
+(cd erlang && GOWORK=off go test ./...)
+(cd actor/erlang && GOWORK=off go test ./...)
 (cd actor/etcd && GOWORK=off go test ./...)
 (cd actor/codec/protobuf && GOWORK=off go test ./...)
 ```

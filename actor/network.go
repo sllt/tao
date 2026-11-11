@@ -595,7 +595,7 @@ func (w *network) call(ctx context.Context, to Addr, message any, sender PID) (a
 // bounded timer cache as incoming Calls. Its private scope materializes a
 // standard context only when a transport operation actually needs one.
 func (w *network) callDefault(parent context.Context, to Addr, message any, sender PID) (any, error) {
-	state := &defaultCallState{scope: requestScope{parent: parent, deadline: time.Now().Add(w.node.opts.CallTimeout)}}
+	state := &defaultCallState{scope: requestScope{parent: parent, deadline: time.Now().Add(w.node.opts.CallTimeout), hasDeadline: true}}
 	return w.callOwned(&state.scope, nil, to, message, sender, state)
 }
 

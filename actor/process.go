@@ -400,11 +400,14 @@ func (p *process) runWithBatch(storage **mailboxBatch) *process {
 		}
 		message := p.mailbox.pop()
 		p.mu.Unlock()
-		if message.request != nil && message.request.contextErr() != nil {
-			if message.release != nil {
-				message.release()
+		if message.request != nil {
+			if err := message.request.contextErr(); err != nil {
+				if message.release != nil {
+					message.release()
+				}
+				p.node.expireRequest(message.request, err)
+				continue
 			}
-			continue
 		}
 		if err := p.invoke(message); err != nil {
 			p.requestStop(&CrashError{PID: p.pid, Cause: err}, false)
@@ -498,7 +501,7 @@ func (p *process) invoke(message envelope) (err error) {
 			missing := r.missingReply()
 			if missing {
 				p.releaseNext()
-				_ = p.node.reply(r, p.pid, nil, ErrNoReply, true)
+				_ = p.node.noReply(r, p.pid)
 			}
 		}
 	}()

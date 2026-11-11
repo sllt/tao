@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        module: [taonet, actor, actor/etcd, actor/codec/protobuf]
+        module: [taonet, actor, erlang, actor/erlang, actor/etcd, actor/codec/protobuf]
     env:
       GOWORK: 'off'
     defaults:
