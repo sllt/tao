@@ -22,11 +22,11 @@
 
 普通消息与系统通知有不同的调度优先级；不要假定二者合成一个全局 FIFO。`Stop`、`Replace`、`Handoff` 和状态检查在执行边界处理。
 
-`Sender`、`Context`、`Send`、`Call`、`Reply` 等 Actor 能力在 `Receive` 的同步调用栈内使用。外部并发发送使用 `Node`；外部回复使用 `DeferredReply`。本地消息允许共享内存，发出后不要继续修改共享 `map`、`slice` 或其底层数据。
+`Sender`、`Context`、`Send`、`SendAfter`、`Call`、`Reply` 等 Actor 能力在 `Receive` 的同步调用栈内使用。外部并发发送使用 `Node`；外部回复与定时器取消/检查使用 `DeferredReply` 和 `TimerRef`。本地消息允许共享内存，发出后不要继续修改共享 `map`、`slice` 或其底层数据。
 
 ## 同步请求与错误
 
-`Node.Call[T]` 和包级 `actor.Call[T]` 返回类型化结果。Actor 内部使用 `CallAs[T]`，或使用返回 `any` 的 `Call`。类型不匹配返回 `ErrReplyType`；`nil` 对可为 `nil` 的类型有效，对 `int` 等标量无效。
+`Node.Call[T]`、`Actor.Call[T]` 和包级 `actor.Call[T]` 返回类型化结果；需要动态类型时使用 `Call[any]`。类型不匹配返回 `ErrReplyType`；`nil` 对可为 `nil` 的类型有效，对 `int` 等标量无效。
 
 未指定 deadline 时，`Call` 使用节点的 `CallTimeout`，默认 5 秒。调用方取消、实例停止或崩溃会使旧回复凭据失效。同步调用自己返回 `ErrSelfCall`。`A->B->A` 的同步调用可能互相等待，需要改用异步请求或调整业务依赖。
 
@@ -36,20 +36,53 @@
 | 业务拒绝 | `ReplyError(businessError)`，随后正常返回 |
 | 需要延后回复 | 先 `Defer()`，保存一次性凭据 |
 | `Receive` 无回复且未 `Defer` | 调用者收到 `ErrNoReply` |
-| 调用者已经不再等待 | 回复可能返回 `ErrReplyExpired` |
+| 调用者已经不再等待 | 普通回复丢弃迟到结果，返回 `nil`；Checked 回复返回 `ErrReplyExpired` |
 | 实例自身故障 | `Receive` 返回错误或 panic，交给监督处理 |
 
-`Reply` 返回的是回复状态，不自动等于实例故障。允许丢弃迟到回复的服务可以只过滤 `ErrReplyExpired`：
+普通回复可直接从 handler 返回，调用者取消不会因此重启 Actor：
 
 ```go
-err := a.Reply(value)
-if errors.Is(err, actor.ErrReplyExpired) {
-	return nil
-}
-return err
+return a.Reply(value)
 ```
 
-对 `DeferredReply.Reply` / `ReplyError` 也采用相同的业务判断。重复回复或错误使用凭据仍应显露；不要把所有错误都吞掉。
+需要知道凭据是否过期时，使用 `ReplyChecked` / `ReplyErrorChecked` 并处理 `ErrReplyExpired`；`DeferredReply` 提供相同的普通与 Checked 方法。重复成功回复仍返回 `ErrAlreadyReplied`，非 Call 中回复或空凭据返回 `ErrNotCall`。业务 `ReplyError(err)` 中的错误会原样传给调用者，不受此规则影响。所有回复方法都不承诺对端已收到或处理结果。
+
+## 实例生命周期定时器
+
+在 `Receive` 中用 `SendAfter` 向当前实例延后发送消息；到期消息仍由邮箱串行处理：
+
+```go
+timer, err := a.SendAfter(30*time.Second, IdleCheck{})
+if err != nil {
+	return err
+}
+// 保存 timer，在不再需要时调用 timer.Cancel()。
+```
+
+`SendAfter` 返回 `(TimerRef, error)`。非正延迟立即具备投递资格；`TimerRef.Done()` 在入队尝试完成或被取消后关闭，`Err()` 报告结果：成功入队为 `nil`，显式取消为 `context.Canceled`，实例停止为 `ErrStopped`，邮箱满为 `ErrMailboxFull`。入队成功不表示业务执行完成；不能在当前 handler 等待它所发送消息的业务回复。
+
+`Cancel()` 返回 `true` 保证发送尚未被回调认领，消息不会入队；返回 `false` 时不能撤回已认领或已入队消息。凭据可在外部 goroutine 取消或检查。零值凭据的 `Cancel` 为 `false`、`Done` 为 `nil`、`Err` 为 `nil`。
+
+timer 绑定具体 PID，Stop、崩溃和重启会取消尚未认领的 timer；Replace/Handoff 不迁移 timer，应在普通启动的 `Started` 或替换/迁移完成的 `Activated` 中按业务状态重新建立。恢复准备阶段不允许调度 timer。定时消息遵循本地 Send 的不可变共享规则。没有周期 API；需要重复时可在处理结束后重新 `SendAfter`，避免积压重复 tick。
+
+## 声明式监督节点
+
+`Supervisor` 返回普通 `Factory`，复用已有的监督策略、启动和清理流程：
+
+```go
+parent, err := node.Spawn(actor.Supervisor(actor.SupervisorSpec{
+	Strategy: actor.RestForOne,
+	Children: []actor.ChildSpec{
+		{Name: "counter", Factory: func() actor.Behavior { return &Counter{} }},
+	},
+}), actor.WithName("app"))
+```
+
+`MaxRestarts` 和 `Window` 为零时保留默认的 10 秒内 5 次重启。Children 按声明顺序启动、逆序停止；任一子节点启动失败会使父节点启动失败并清理已启动的子节点。`ChildSpec.Options` 配置现有 SpawnOption，非空 `Name` 优先于其中的 `WithName`。动态创建子节点的服务仍可直接使用 `Actor.Spawn`。
+
+## 消息注册简写
+
+`actor.Msg[T](name, version)` 等价于带类型样本的 `MessageType`，例如 `actor.Msg[Get]("counter.get", 1)` 和 `actor.Msg[int64]("counter.value", 1)`。指针类型使用 `actor.Msg[*Request](...)`，无需分配样本对象。校验仍由 Registry 完成；同一 Go 类型只注册一次，所有返回该类型的消息共用此注册。标量不会默认预注册。
 
 ## 异步请求
 
@@ -58,7 +91,7 @@ return err
 - 用 `RequestID` 关联业务状态。结果按完成顺序到达，不保证发起顺序；`Sender` 为 `nil`。
 - deadline 从 `Request` 入口计算，未指定时使用 `CallTimeout`。传入 `a.Context()` 会继承当前入站 `Call` 的取消及完成；独立工作使用独立 context。
 - `Defer` 延后的是入站回复，`Request` 发起的是出站调用。需要转发结果时，保存 `DeferredReply`，在 `CallResult` 中完成它。
-- `Request` 可以请求自身；当前 `Receive` 返回后处理请求，再处理结果。同步 `Call` / `CallAs` 自己仍被拒绝。
+- `Request` 可以请求自身；当前 `Receive` 返回后处理请求，再处理结果。同步 `Call` 自己仍被拒绝。
 - `CancelRequest(id)` 请求取消本实例尚未提交结果的操作。返回 `true` 不表示回复一定没有先赢；最终结果仍可观察，已经发生的业务效果不会撤销。
 
 `NodeOptions.MaxAsyncRequests` 限制运行中的 `Request` 和尚未进入 `Receive` 的完成结果，默认取 `MaxPendingCalls`。单 Actor 同时不超过其 `MailboxSize`。异步额度到结果开始被 `Receive` 处理时才归还。

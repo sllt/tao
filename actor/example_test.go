@@ -17,9 +17,7 @@ func ExampleFromFunc() {
 	pid, err := node.Spawn(actor.FromFunc(func(self *actor.Actor, message any) error {
 		if name, ok := message.(string); ok {
 			// A caller that stopped waiting is not a failure of this actor.
-			if err := self.Reply("hello " + name); !errors.Is(err, actor.ErrReplyExpired) {
-				return err
-			}
+			return self.Reply("hello " + name)
 		}
 		return nil
 	}), actor.WithName("greeter"))
@@ -54,16 +52,11 @@ func ExampleActor_Request() {
 	defer node.Stop(context.Background())
 	worker, err := node.Spawn(actor.FromFunc(func(self *actor.Actor, message any) error {
 		if message == "compute" {
-			value, err := self.CallAs[int](self.Context(), self.Sender(), "base")
+			value, err := self.Call[int](self.Context(), self.Sender(), "base")
 			if err != nil {
-				if err := self.ReplyError(err); !errors.Is(err, actor.ErrReplyExpired) {
-					return err
-				}
-				return nil
+				return self.ReplyError(err)
 			}
-			if err := self.Reply(value + 2); !errors.Is(err, actor.ErrReplyExpired) {
-				return err
-			}
+			return self.Reply(value + 2)
 		}
 		return nil
 	}))
@@ -81,9 +74,7 @@ func ExampleActor_Request() {
 					completed <- actor.CallResult{ID: id, Err: err}
 				}
 			case "base":
-				if err := self.Reply(40); !errors.Is(err, actor.ErrReplyExpired) {
-					return err
-				}
+				return self.Reply(40)
 			}
 		case actor.CallResult:
 			completed <- message

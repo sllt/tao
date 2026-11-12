@@ -45,7 +45,7 @@ type codecMessage struct {
 }
 
 func TestRegistryUsesStableNamesAndPreservesFixedWidthValues(t *testing.T) {
-	registry, err := NewRegistry([]MessageType{{"counter.state", 1, codecMessage{}}, {"counter.pointer", 1, (*codecMessage)(nil)}, {"integer", 1, int64(0)}}, 0)
+	registry, err := NewRegistry([]MessageType{Msg[codecMessage]("counter.state", 1), Msg[*codecMessage]("counter.pointer", 1), Msg[int64]("integer", 1)}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestRegistryUsesStableNamesAndPreservesFixedWidthValues(t *testing.T) {
 }
 
 func TestRegistryRejectsRuntimeTypesAndAmbiguousSchemas(t *testing.T) {
-	for _, sample := range []any{Started{}, Stopped{}, Down{}, Exit{}, Actor{}, &Node{}, CallResult{}, RequestID{}, func() {}, make(chan int), struct{ Context context.Context }{}, struct{ Value any }{}, int(1)} {
+	for _, sample := range []any{Started{}, Stopped{}, Down{}, Exit{}, Actor{}, &Node{}, CallResult{}, RequestID{}, TimerRef{}, func() {}, make(chan int), struct{ Context context.Context }{}, struct{ Value any }{}, int(1)} {
 		if _, err := NewRegistry([]MessageType{{"bad", 1, sample}}, 0); err == nil {
 			t.Fatalf("registered unsupported type %T", sample)
 		}

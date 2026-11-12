@@ -118,7 +118,7 @@ func TestBeginCallWireOrderAndOrigins(t *testing.T) {
 	if hDefer.Cancel() {
 		t.Fatal("Cancel succeeded after TargetExit")
 	}
-	if err := deferred.Reply("too late"); !errors.Is(err, ErrReplyExpired) {
+	if err := deferred.ReplyChecked("too late"); !errors.Is(err, ErrReplyExpired) {
 		t.Fatalf("late DeferredReply after TargetExit got %v, want ErrReplyExpired", err)
 	}
 	close(blockCh)
@@ -224,7 +224,7 @@ func TestBeginCallContextDeadlinesAndParentCancellation(t *testing.T) {
 	if cd.Origin != Canceled || !errors.Is(cd.Err, context.Canceled) {
 		t.Fatalf("deferred parent cancel got %+v, want Canceled", cd)
 	}
-	if err := ticket.Reply("late"); !errors.Is(err, ErrReplyExpired) {
+	if err := ticket.ReplyChecked("late"); !errors.Is(err, ErrReplyExpired) {
 		t.Fatalf("ticket.Reply after parent cancel got %v, want ErrReplyExpired", err)
 	}
 

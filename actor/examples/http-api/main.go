@@ -63,15 +63,6 @@ var (
 	errAccountLimit      = errors.New("account balance or transaction count limit reached")
 )
 
-// Caller cancellation invalidates a reply ticket, not the business instance.
-// Other reply errors still expose programming or lifecycle errors to supervision.
-func allowExpiredReply(err error) error {
-	if errors.Is(err, actor.ErrReplyExpired) {
-		return nil
-	}
-	return err
-}
-
 func validAccountID(id string) bool {
 	if len(id) < 1 || len(id) > 64 {
 		return false
@@ -98,18 +89,18 @@ func (s *accountSupervisor) Receive(msg any) error {
 		s.created = make(map[string]struct{})
 	case ensureAccount:
 		if !validAccountID(m.ID) {
-			return allowExpiredReply(s.ReplyError(errInvalidAccountID))
+			return s.ReplyError(errInvalidAccountID)
 		}
 		if _, exists := s.created[m.ID]; !exists {
 			_, err := s.Spawn(func() actor.Behavior {
 				return &accountActor{id: m.ID}
 			}, actor.WithName(m.ID), actor.WithKind("account", "1"))
 			if err != nil && !errors.Is(err, actor.ErrNameTaken) {
-				return allowExpiredReply(s.ReplyError(err))
+				return s.ReplyError(err)
 			}
 			s.created[m.ID] = struct{}{}
 		}
-		return allowExpiredReply(s.Reply(actor.Ref{Path: "accounts/" + m.ID}))
+		return s.Reply(actor.Ref{Path: "accounts/" + m.ID})
 	}
 	return nil
 }
@@ -127,33 +118,33 @@ func (a *accountActor) Receive(msg any) error {
 	switch m := msg.(type) {
 	case deposit:
 		if m.Amount <= 0 {
-			return allowExpiredReply(a.ReplyError(errInvalidAmount))
+			return a.ReplyError(errInvalidAmount)
 		}
 		if a.balance > math.MaxInt64-m.Amount || a.txCount == math.MaxInt64 {
-			return allowExpiredReply(a.ReplyError(errAccountLimit))
+			return a.ReplyError(errAccountLimit)
 		}
 		a.balance += m.Amount
 		a.txCount++
 		a.audit("deposit", m.Amount)
-		return allowExpiredReply(a.Reply(a.snapshot()))
+		return a.Reply(a.snapshot())
 
 	case withdraw:
 		if m.Amount <= 0 {
-			return allowExpiredReply(a.ReplyError(errInvalidAmount))
+			return a.ReplyError(errInvalidAmount)
 		}
 		if a.balance < m.Amount {
-			return allowExpiredReply(a.ReplyError(errInsufficientFunds))
+			return a.ReplyError(errInsufficientFunds)
 		}
 		if a.txCount == math.MaxInt64 {
-			return allowExpiredReply(a.ReplyError(errAccountLimit))
+			return a.ReplyError(errAccountLimit)
 		}
 		a.balance -= m.Amount
 		a.txCount++
 		a.audit("withdraw", m.Amount)
-		return allowExpiredReply(a.Reply(a.snapshot()))
+		return a.Reply(a.snapshot())
 
 	case getAccount:
-		return allowExpiredReply(a.Reply(a.snapshot()))
+		return a.Reply(a.snapshot())
 	}
 	return nil
 }
@@ -193,7 +184,7 @@ func (a *auditActor) Receive(msg any) error {
 	case auditLog:
 		a.totalEvents++
 	case getAuditCount:
-		return allowExpiredReply(a.Reply(a.totalEvents))
+		return a.Reply(a.totalEvents)
 	}
 	return nil
 }

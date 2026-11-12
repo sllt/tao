@@ -96,6 +96,7 @@ func (p *process) retire(reason, cleanup error) (bool, bool) {
 	p.mailbox = mailbox{limit: p.mailbox.limit}
 	p.system = nil
 	p.cancelAsyncRequestsLocked()
+	p.cancelTimersLocked()
 	if p.inspection != nil {
 		p.inspection.done <- inspectionResult{err: failure}
 		p.inspection = nil

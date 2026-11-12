@@ -88,7 +88,7 @@ func (a *service) Receive(message any) error {
 			<-a.lifetime.Done()
 			// Stop may already have completed the caller. Keep Reply's own
 			// result visible without turning expected expiration into a crash.
-			a.flight.replyError <- a.ReplyError(actor.ErrStopped)
+			a.flight.replyError <- a.ReplyErrorChecked(actor.ErrStopped)
 			return nil
 		case "work":
 			return a.Reply(reply{message.Sequence, checksum(message), a.PID(), a.Name()})
@@ -116,11 +116,7 @@ func (a *bridge) Receive(message any) error {
 		ticket := a.Defer()
 		id, err := a.Request(a.Context(), message.target, message.message)
 		if err != nil {
-			replyErr := ticket.ReplyError(err)
-			if errors.Is(replyErr, actor.ErrReplyExpired) {
-				return nil
-			}
-			return replyErr
+			return ticket.ReplyError(err)
 		}
 		if a.pending == nil {
 			a.pending = make(map[actor.RequestID]actor.DeferredReply)
@@ -137,9 +133,6 @@ func (a *bridge) Receive(message any) error {
 			err = ticket.ReplyError(message.Err)
 		} else {
 			err = ticket.Reply(message.Value)
-		}
-		if errors.Is(err, actor.ErrReplyExpired) {
-			return nil
 		}
 		return err
 	case actor.Stopped:
@@ -167,7 +160,7 @@ func (a *probeActor) Receive(message any) error {
 		close(message.entered)
 		<-message.release
 		if message.replied != nil {
-			message.replied <- a.Reply(int64(123))
+			message.replied <- a.ReplyChecked(int64(123))
 		}
 	case tick:
 		a.ticks++
@@ -664,7 +657,7 @@ func (r *runner) narrowProbes() error {
 	if err != nil {
 		return err
 	}
-	if err = r.probe("cancellation", "Canceled caller; late Reply returns ErrReplyExpired", func(p *probeResult) error {
+	if err = r.probe("cancellation", "Canceled caller; late ReplyChecked returns ErrReplyExpired", func(p *probeResult) error {
 		ctx, cancel := context.WithTimeout(r.ctx, operationTimeout)
 		defer cancel()
 		caller, cancelCall := context.WithCancel(ctx)

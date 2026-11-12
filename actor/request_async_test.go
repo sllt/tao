@@ -364,7 +364,7 @@ func TestAsyncRequestErrorsCancellationAndRemoteResults(t *testing.T) {
 			if message == "self-request" {
 				// Request can target this Actor, but its handler context must
 				// not let a synchronous child inherit the async self-call bypass.
-				if _, err := a.Call(a.Context(), a.PID(), "sync-self"); !errors.Is(err, ErrSelfCall) {
+				if _, err := a.Call[any](a.Context(), a.PID(), "sync-self"); !errors.Is(err, ErrSelfCall) {
 					return a.ReplyError(errors.New("synchronous self-call was not rejected inside asynchronous self Request"))
 				}
 				return a.Reply(31)
@@ -449,7 +449,7 @@ func TestAsyncRequestErrorsCancellationAndRemoteResults(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("%s did not reach the callee context", name)
 		}
-		if err := tickets[name].Reply.Reply(1); !errors.Is(err, ErrReplyExpired) {
+		if err := tickets[name].Reply.ReplyChecked(1); !errors.Is(err, ErrReplyExpired) {
 			t.Fatalf("late %s reply: %v", name, err)
 		}
 	}
@@ -499,7 +499,7 @@ func TestAsyncRequestDiagnosticsSeparateSynchronousChildAndPreserveContext(t *te
 		if message == "request" {
 			ctx := a.Context()
 			inspectContext(ctx)
-			_, err := a.Call(ctx, first, "back")
+			_, err := a.Call[any](ctx, first, "back")
 			innerErrors <- err
 			causes <- context.Cause(ctx)
 		}

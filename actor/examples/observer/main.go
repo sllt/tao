@@ -70,7 +70,7 @@ type gateway struct {
 func (g *gateway) Receive(message any) error {
 	if job, ok := message.(work); ok {
 		g.calls++
-		_, err := g.Call(g.Context(), actor.Ref{Node: "worker-demo", Path: "remote-worker"}, job)
+		_, err := g.Call[any](g.Context(), actor.Ref{Node: "worker-demo", Path: "remote-worker"}, job)
 		if err != nil {
 			g.failed++
 		}

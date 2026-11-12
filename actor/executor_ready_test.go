@@ -178,7 +178,7 @@ func TestExecutorReadyQueueProgressWithAllWorkersBlocked(t *testing.T) {
 					_, err = io.ReadFull(reader, value[:])
 				case "actor-call":
 					var value any
-					value, err = a.Call(t.Context(), callee, "ask")
+					value, err = a.Call[any](t.Context(), callee, "ask")
 					if err == nil && value != 42 {
 						err = errors.New("wrong Actor.Call result")
 					}

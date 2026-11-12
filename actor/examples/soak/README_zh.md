@@ -37,7 +37,7 @@ go run ./examples/soak -duration=2m -workers=8 -actors=8 \
 
 ## 探针与结果格式
 
-启动阶段包含两个确定性探针：取消已进入 handler 的本地 `Call` 并检查迟到 `Reply` 返回 `ErrReplyExpired`；阻塞一个容量为 1 的邮箱并确认额外消息返回 `ErrMailboxFull`。
+启动阶段包含两个确定性探针：取消已进入 handler 的本地 `Call` 并检查迟到 `ReplyChecked` 返回 `ErrReplyExpired`；阻塞一个容量为 1 的邮箱并确认额外消息返回 `ErrMailboxFull`。
 
 `stdout` 每行是一个 JSON 对象，包含 `type`（`configuration`、`resources`、`phase`、`probe`、`summary`）、`time`、`elapsed_ms` 和 `data`。停机后依次输出 `nodes_closed`、`after_gc_0`、`after_gc_1`、`after_gc_2`，并检查所有 Actor、pending `Call`、`AsyncRequests` 和排队消息均已清零。
 

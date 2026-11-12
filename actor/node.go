@@ -460,6 +460,7 @@ func (n *Node) markUnresponsive(p *process) {
 	}
 	p.unresponsive = true
 	p.cancelAsyncRequestsLocked()
+	p.cancelTimersLocked()
 	p.suppressRestart = true
 	n.publishPIDLocked(p, false)
 	if p.path != "" && n.routes[p.path].process == p {

@@ -61,7 +61,7 @@ Successful responses return `id`, `balance`, `tx_count`, and `pid`. Error respon
 
 The gateway never automatically retries business operations. Lazy creation only triggers on explicit `ErrNoProcess` / `ErrStarting` errors—never on `Unknown`. Because a timeout or lost reply does not prove the actor did not execute the mutation, retrying a deposit or withdrawal without an application-level idempotency protocol would apply the mutation twice.
 
-Actors return business rejections via `ReplyError` and ignore `ErrReplyExpired` when a caller stops waiting before the reply is sent.
+Actors return business rejections via `ReplyError`; ordinary reply methods ignore callers that have already stopped waiting.
 
 ## Testing
 

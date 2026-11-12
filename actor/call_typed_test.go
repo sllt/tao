@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-type callAsOutcome struct {
+type callOutcome struct {
 	value int
 	err   error
 }
 
-func TestActorCallAsReplyErrorsAddressesAndLegacyCall(t *testing.T) {
+func TestActorCallReplyErrorsAddressesAndDynamicCall(t *testing.T) {
 	n := testNode(t, NodeOptions{})
 	business := errors.New("business refusal")
 	callee := spawn(t, n, factory(func(a *testBehavior, message any) error {
@@ -33,13 +33,13 @@ func TestActorCallAsReplyErrorsAddressesAndLegacyCall(t *testing.T) {
 		if !ok {
 			return nil
 		}
-		if command == "legacy" {
-			value, err := a.Call(a.Context(), callee, "good")
+		if command == "dynamic" {
+			value, err := a.Call[any](a.Context(), callee, "good")
 			number, matches := value.(int)
 			if err == nil && !matches {
-				err = errors.New("legacy Call changed its reply")
+				err = errors.New("dynamic Call changed its reply")
 			}
-			return a.Reply(callAsOutcome{number, err})
+			return a.Reply(callOutcome{number, err})
 		}
 		var to Addr = callee
 		request := command
@@ -51,8 +51,8 @@ func TestActorCallAsReplyErrorsAddressesAndLegacyCall(t *testing.T) {
 		case "self-ref":
 			to, request = Ref{Path: "caller"}, "good"
 		}
-		value, err := a.CallAs[int](a.Context(), to, request)
-		return a.Reply(callAsOutcome{value, err})
+		value, err := a.Call[int](a.Context(), to, request)
+		return a.Reply(callOutcome{value, err})
 	}), WithName("caller"))
 	for _, test := range []struct {
 		command string
@@ -61,7 +61,7 @@ func TestActorCallAsReplyErrorsAddressesAndLegacyCall(t *testing.T) {
 	}{
 		{"good", 42, nil},
 		{"qualified-ref", 42, nil},
-		{"legacy", 42, nil},
+		{"dynamic", 42, nil},
 		{"business", 0, business},
 		{"wrong", 0, ErrReplyType},
 		{"nil", 0, ErrReplyType},
@@ -69,7 +69,7 @@ func TestActorCallAsReplyErrorsAddressesAndLegacyCall(t *testing.T) {
 		{"self-ref", 0, ErrSelfCall},
 	} {
 		t.Run(test.command, func(t *testing.T) {
-			got, err := n.Call[callAsOutcome](t.Context(), caller, test.command)
+			got, err := n.Call[callOutcome](t.Context(), caller, test.command)
 			if err != nil || got.value != test.value || !errors.Is(got.err, test.err) {
 				t.Fatalf("Actor call: value=%d inner=%v outer=%v; want %d, %v", got.value, got.err, err, test.value, test.err)
 			}
@@ -77,7 +77,7 @@ func TestActorCallAsReplyErrorsAddressesAndLegacyCall(t *testing.T) {
 	}
 }
 
-func TestActorCallAsAcceptsNilPointerReplies(t *testing.T) {
+func TestActorCallAcceptsNilPointerReplies(t *testing.T) {
 	n := testNode(t, NodeOptions{})
 	callee := spawn(t, n, factory(func(a *testBehavior, message any) error {
 		switch message {
@@ -94,7 +94,7 @@ func TestActorCallAsAcceptsNilPointerReplies(t *testing.T) {
 	}
 	caller := spawn(t, n, factory(func(a *testBehavior, message any) error {
 		if command, ok := message.(string); ok {
-			value, err := a.CallAs[*int](a.Context(), callee, command)
+			value, err := a.Call[*int](a.Context(), callee, command)
 			return a.Reply(outcome{value, err})
 		}
 		return nil
@@ -107,7 +107,7 @@ func TestActorCallAsAcceptsNilPointerReplies(t *testing.T) {
 	}
 }
 
-func TestActorCallAsPreservesCallerAndActorCancellation(t *testing.T) {
+func TestActorCallPreservesCallerAndActorCancellation(t *testing.T) {
 	for _, mode := range []string{"caller", "actor-stop"} {
 		t.Run(mode, func(t *testing.T) {
 			n := testNode(t, NodeOptions{})
@@ -123,7 +123,7 @@ func TestActorCallAsPreservesCallerAndActorCancellation(t *testing.T) {
 				}
 				return nil
 			}))
-			outcomes := make(chan callAsOutcome, 1)
+			outcomes := make(chan callOutcome, 1)
 			caller := spawn(t, n, factory(func(a *testBehavior, message any) error {
 				if message == "call" {
 					// Completion belongs to the controlled cancellation/Stop,
@@ -135,8 +135,8 @@ func TestActorCallAsPreservesCallerAndActorCancellation(t *testing.T) {
 						// Actor lifetime. Calling Node.Call here would omit it.
 						ctx = context.Background()
 					}
-					value, err := a.CallAs[int](ctx, callee, "wait")
-					outcomes <- callAsOutcome{value, err}
+					value, err := a.Call[int](ctx, callee, "wait")
+					outcomes <- callOutcome{value, err}
 				}
 				return nil // The cancelled/stopped outer request no longer needs a reply.
 			}))

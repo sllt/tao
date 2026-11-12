@@ -22,11 +22,11 @@ This guide covers the runtime semantics of `github.com/sllt/tao/actor`. For a qu
 
 System notifications and user messages have separate scheduling priorities—do not assume they form a single unified FIFO queue. `Stop`, `Replace`, `Handoff`, and `Inspect` operations run at clean execution boundaries between turns.
 
-Actor capabilities (`Sender`, `Context`, `Send`, `Call`, `Reply`) must only be used on the synchronous call stack of `Receive`. Concurrent callers outside the actor use `Node` methods; asynchronous replies from external goroutines or later turns use `DeferredReply`. Local messages pass Go values without copying—never mutate shared maps, slices, or pointers after sending.
+Actor capabilities (`Sender`, `Context`, `Send`, `SendAfter`, `Call`, `Reply`) must only be used on the synchronous call stack of `Receive`. Concurrent callers outside the actor use `Node` methods; asynchronous replies and timer handles used from external goroutines or later turns use `DeferredReply` and `TimerRef`. Local messages pass Go values without copying—never mutate shared maps, slices, or pointers after sending.
 
 ## Synchronous Calls & Error Handling
 
-`Node.Call[T]` and package-level `actor.Call[T]` return typed replies. Inside an actor, use `CallAs[T]` or `Call` (which returns `any`). A reply type mismatch returns `ErrReplyType`; `nil` is valid for nilable types (interfaces, pointers, slices, maps, funcs, channels) and invalid for scalar types such as `int`.
+`Node.Call[T]`, `Actor.Call[T]`, and package-level `actor.Call[T]` return typed replies. Use `Call[any]` for dynamic results. A reply type mismatch returns `ErrReplyType`; `nil` is valid for nilable types (interfaces, pointers, slices, maps, funcs, channels) and invalid for scalar types such as `int`.
 
 When the caller's context has no deadline, `Call` applies `NodeOptions.CallTimeout` (default 5 seconds). Caller cancellation, target stop, or target crash invalidates the reply ticket. Calling oneself synchronously returns `ErrSelfCall`. Synchronous cycles (`A -> B -> A`) can deadlock and should be refactored to use `Actor.Request`.
 
@@ -36,20 +36,51 @@ When the caller's context has no deadline, `Call` applies `NodeOptions.CallTimeo
 | Business rejection | `ReplyError(businessError)`, then return `nil` from `Receive` |
 | Reply asynchronously / later | Call `Defer()` and retain the single-use `DeferredReply` ticket |
 | `Receive` returns without `Reply` or `Defer` | Caller receives `ErrNoReply` |
-| Caller timed out or canceled before reply | `Reply` returns `ErrReplyExpired` |
+| Caller timed out or canceled before reply | Ordinary replies discard the late result and return `nil`; Checked replies return `ErrReplyExpired` |
 | Actor internal failure | Return a non-nil error or panic from `Receive` to trigger supervision |
 
-`Reply` returns the delivery status of the reply itself, which is distinct from an actor crash. Services that wish to ignore late replies when callers stop waiting can filter `ErrReplyExpired`:
+An ordinary reply can be returned directly from a handler without restarting the actor when the caller cancels:
 
 ```go
-err := a.Reply(value)
-if errors.Is(err, actor.ErrReplyExpired) {
-	return nil
-}
-return err
+return a.Reply(value)
 ```
 
-Apply the same check to `DeferredReply.Reply` / `ReplyError`. Duplicate replies or invalid ticket usage should still be surfaced rather than blindly ignored.
+Use `ReplyChecked` / `ReplyErrorChecked` to inspect `ErrReplyExpired`. `DeferredReply` provides the same ordinary and Checked methods. Duplicate successful replies still return `ErrAlreadyReplied`; replying outside a Call or using an empty ticket returns `ErrNotCall`. Business errors passed to `ReplyError` are delivered unchanged. No reply method confirms remote receipt or execution.
+
+## Instance-owned Timers
+
+Within `Receive`, schedule a message for the current physical instance:
+
+```go
+timer, err := a.SendAfter(30*time.Second, IdleCheck{})
+if err != nil {
+	return err
+}
+// Retain timer and call timer.Cancel() when no longer needed.
+```
+
+`SendAfter` returns `(TimerRef, error)`. Non-positive delays are immediately eligible. The callback enqueues the message; it never invokes the handler directly. `Done()` closes after the admission attempt or cancellation; `Err()` then reports `nil`, `context.Canceled`, `ErrStopped`, or an admission error such as `ErrMailboxFull`. Admission is not business completion. `Cancel()` returning true prevents admission; false means the callback already claimed the send or the timer finished. It cannot retract queued messages. TimerRef methods may be used by external goroutines; its zero value has a nil Done channel, nil Err, and false Cancel.
+
+Stop, crash, and restart cancel unclaimed timers. Replace/Handoff do not transfer timers; recreate them from business state during ordinary `Started` or post-restoration `Activated`. Scheduling during restore preparation is rejected. Local Send ownership rules apply to scheduled messages. There is no periodic API; handlers can schedule the next occurrence after processing the current one to avoid accumulating ticks.
+
+## Declarative Supervisors
+
+`Supervisor` returns an ordinary Factory using the existing supervision machinery:
+
+```go
+parent, err := node.Spawn(actor.Supervisor(actor.SupervisorSpec{
+	Strategy: actor.RestForOne,
+	Children: []actor.ChildSpec{
+		{Name: "counter", Factory: func() actor.Behavior { return &Counter{} }},
+	},
+}), actor.WithName("app"))
+```
+
+Zero `MaxRestarts` and `Window` retain the default of 5 restarts in 10 seconds. Children start in declaration order and stop in reverse order. A child startup failure fails parent startup and cleans up children already started. `ChildSpec.Options` accepts existing SpawnOptions; a non-empty Name takes precedence over WithName. Dynamic supervisors can continue using Actor.Spawn.
+
+## Message Registration Shorthand
+
+`actor.Msg[T](name, version)` constructs a MessageType with a typed sample: for example, `actor.Msg[Get]("counter.get", 1)` or `actor.Msg[int64]("counter.value", 1)`. Use `actor.Msg[*Request](...)` for pointer types without allocating a sample. Registry still validates types and names. Register a Go type once; all messages returning it share that registration. Scalars are not registered automatically.
 
 ## Asynchronous Requests
 

@@ -20,7 +20,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 
@@ -46,11 +45,7 @@ func run() error {
 		if !ok {
 			return nil
 		}
-		err := self.Reply("hello " + name)
-		if errors.Is(err, actor.ErrReplyExpired) {
-			return nil
-		}
-		return err
+		return self.Reply("hello " + name)
 	}))
 	if err != nil {
 		return err
@@ -74,11 +69,14 @@ For stateful actors, embed `actor.Actor` in a struct and implement `Receive(any)
 | :--- | :--- | :--- |
 | Spawn instance | `Node.Spawn` / `Actor.Spawn` | Waits for `Started` to complete and returns `PID` |
 | One-way message | `Node.Send` / `Actor.Send` | Returns admission or delivery error; does not wait for handler execution |
-| Synchronous call | `Node.Call[T]` / `Actor.CallAs[T]` | Returns typed result and error |
+| Synchronous call | `Node.Call[T]` / `Actor.Call[T]` | Returns typed result and error |
 | Ordered call admission | `Node.BeginCall` | Admits call to a local `PID` synchronously and delivers `CallCompletion` via non-blocking callback |
 | Asynchronous request | `Actor.Request` | Returns `RequestID`; delivers `CallResult` back to `Receive` |
 | Reply to call | `Reply` / `ReplyError` | Sends business result or error to the active caller |
 | Deferred reply | `Defer` | Returns a single-use `DeferredReply` ticket usable from other goroutines or future turns |
+| Delayed message | `Actor.SendAfter` | Schedules for the current instance; TimerRef supports cancellation and admission results |
+| Supervisor | `Supervisor(SupervisorSpec)` | Builds a declarative subtree Factory using ordinary supervision |
+| Message registration | `Msg[T](name, version)` | Creates a typed registration without a handwritten Sample |
 | Lifecycle observation | `Monitor` / `Link` | Delivers `Down` / `Exit` messages to `Receive` |
 | State handoff | `Replace` / `Handoff` | Replaces local behavior in-place or migrates a leaf actor across nodes |
 
@@ -87,8 +85,8 @@ For stateful actors, embed `actor.Actor` in a struct and implement `Receive(any)
 
 ## Usage Guidelines
 
-- Returning a non-nil error or panicking from `Receive` triggers supervision. Return business rejections via `ReplyError(err)` and return `nil` from `Receive`; callers that time out or cancel may cause `Reply` to return `ErrReplyExpired`, which handlers can explicitly ignore.
-- Actor state and capabilities (`Sender`, `Context`, `Send`, `Call`, `Reply`) must only be accessed synchronously inside `Receive`. Completion of asynchronous `Request` calls is also delivered sequentially through `Receive`.
+- Returning a non-nil error or panicking from `Receive` triggers supervision. Ordinary `Reply` / `ReplyError` ignore expired callers and can be returned directly from a handler. Use `ReplyChecked` / `ReplyErrorChecked` to inspect `ErrReplyExpired`. Duplicate successful replies and replies outside a Call remain errors.
+- Actor state and capabilities (`Sender`, `Context`, `Send`, `SendAfter`, `Call`, `Reply`) must only be accessed synchronously inside `Receive`. Completion of asynchronous `Request` calls is also delivered sequentially through `Receive`.
 - Local messages pass Go values directly without copying; never mutate slices, maps, or pointers after sending them.
 - Mailboxes and pending call tables are bounded; handle `ErrMailboxFull`, `ErrCapacity`, and context deadlines explicitly.
 - Remote operations that fail with `Unknown` outcome are never replayed automatically. `Replace` and `Handoff` do not provide persistent crash recovery after process loss.

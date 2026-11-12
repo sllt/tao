@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -29,9 +28,7 @@ func (c *Counter) Receive(msg any) error {
 	case Inc:
 		c.count += msg.Delta
 	case Get:
-		if err := c.Reply(c.count); !errors.Is(err, actor.ErrReplyExpired) {
-			return err
-		}
+		return c.Reply(c.count)
 	}
 	return nil
 }
@@ -52,7 +49,9 @@ type ready struct {
 }
 
 func options(name string) actor.NodeOptions {
-	return actor.NodeOptions{Name: name, Network: actor.NetworkOptions{AllowInsecureLoopback: true}, Register: []actor.MessageType{{Name: "counter.inc", Version: 1, Sample: Inc{}}, {Name: "counter.get", Version: 1, Sample: Get{}}, {Name: "counter.value", Version: 1, Sample: int64(0)}}}
+	return actor.NodeOptions{Name: name, Network: actor.NetworkOptions{AllowInsecureLoopback: true}, Register: []actor.MessageType{
+		actor.Msg[Inc]("counter.inc", 1), actor.Msg[Get]("counter.get", 1), actor.Msg[int64]("counter.value", 1),
+	}}
 }
 func stop(n *actor.Node) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

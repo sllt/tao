@@ -57,11 +57,12 @@ type process struct {
 	restartWindow                                          time.Duration
 	restartTimes                                           []time.Time
 	trapExit                                               bool
-	observationsEnded                                      bool        // node.mu
-	published                                              atomic.Bool // stores hold mu; indexes precede true
-	current                                                envelope    // executor only; zero between Receive calls
-	inFlightCall                                           *request    // mu; popped inline PID Call until its turn finishes
-	inlineCallsUsed                                        atomic.Bool // monotonic: this instance has owned an inline PID Call
+	observationsEnded                                      bool                     // node.mu
+	published                                              atomic.Bool              // stores hold mu; indexes precede true
+	current                                                envelope                 // executor only; zero between Receive calls
+	inFlightCall                                           *request                 // mu; popped inline PID Call until its turn finishes
+	inlineCallsUsed                                        atomic.Bool              // monotonic: this instance has owned an inline PID Call
+	timers                                                 map[*actorTimer]struct{} // mu; allocated only by SendAfter
 }
 
 func newProcess(node *Node, parent *process, path string, pid PID, factory Factory, opts spawnOptions) *process {
@@ -183,6 +184,7 @@ func (p *process) requestStop(reason error, suppress bool) {
 	}
 	p.suppressRestart = p.suppressRestart || suppress
 	p.cancelAsyncRequestsLocked()
+	p.cancelTimersLocked()
 	p.interruptBatchLocked()
 	var keep map[*request]bool
 	if p.opts.mailPolicy == PreserveRef && (p.restartRound || !p.suppressRestart && p.restartEligibleLocked()) {

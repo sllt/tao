@@ -40,6 +40,14 @@ type MessageType struct {
 	Version uint32
 	Sample  any
 }
+
+// Msg registers a concrete message type under a stable wire name and version.
+// T may be a typed nil pointer; interfaces are rejected by Registry validation.
+func Msg[T any](name string, version uint32) MessageType {
+	var sample T
+	return MessageType{Name: name, Version: version, Sample: sample}
+}
+
 type EncodedMessage struct {
 	Type    string `json:"type"`
 	Version uint32 `json:"version"`
@@ -109,6 +117,9 @@ func validateWireType(t reflect.Type, maxBytes int, tag string, seen map[reflect
 	seen[t] = true
 	if t.Size() > uintptr(maxBytes) {
 		return fmt.Errorf("%w: static type %v exceeds codec budget", ErrMessageTooLarge, t)
+	}
+	if t == reflect.TypeFor[TimerRef]() {
+		return fmt.Errorf("%w: runtime type %v", ErrInvalidMessage, t)
 	}
 	if t == reflect.TypeFor[Actor]() || t == reflect.TypeFor[Node]() || t == reflect.TypeFor[Started]() || t == reflect.TypeFor[Stopped]() || t == reflect.TypeFor[Down]() || t == reflect.TypeFor[Exit]() || t == reflect.TypeFor[DeferredReply]() || t == reflect.TypeFor[Snapshotting]() || t == reflect.TypeFor[Upgraded]() || t == reflect.TypeFor[Activated]() || t == reflect.TypeFor[CallResult]() || t == reflect.TypeFor[RequestID]() {
 		return fmt.Errorf("%w: runtime type %v", ErrInvalidMessage, t)

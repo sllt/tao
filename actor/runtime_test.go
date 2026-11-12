@@ -286,7 +286,7 @@ func TestCallsRepliesAndDeferredExpiration(t *testing.T) {
 		case "defer":
 			tickets <- a.Defer()
 		case "self":
-			_, err := a.Call(a.Context(), a.PID(), "reply")
+			_, err := a.Call[any](a.Context(), a.PID(), "reply")
 			_ = a.ReplyError(err)
 		case "wait":
 			<-a.Context().Done()
@@ -331,7 +331,7 @@ func TestCallsRepliesAndDeferredExpiration(t *testing.T) {
 	if err := <-result; !errors.Is(err, ErrStopped) {
 		t.Fatal(err)
 	}
-	if err := ticket.Reply(1); !errors.Is(err, ErrReplyExpired) {
+	if err := ticket.ReplyChecked(1); !errors.Is(err, ErrReplyExpired) {
 		t.Fatal(err)
 	}
 }
@@ -433,7 +433,7 @@ func TestPendingCallLimitAndDefaultTimeout(t *testing.T) {
 	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
-	if err := ticket.Reply(nil); !errors.Is(err, ErrReplyExpired) {
+	if err := ticket.ReplyChecked(nil); !errors.Is(err, ErrReplyExpired) {
 		t.Fatal(err)
 	}
 	if stats := n.Stats(); stats.PendingCalls != 0 {

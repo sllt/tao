@@ -299,14 +299,14 @@ func TestRunNextExplicitActorOperationsReleaseSlot(t *testing.T) {
 				switch operation {
 				case "call":
 					var value any
-					value, err = a.Call(a.Context(), target, "ask")
+					value, err = a.Call[any](a.Context(), target, "ask")
 					if err == nil && value != 42 {
 						err = errors.New("wrong Call result")
 					}
 				case "call-canceled":
 					ctx, cancel := context.WithCancel(a.Context())
 					cancel()
-					_, err = a.Call(ctx, target, "ask")
+					_, err = a.Call[any](ctx, target, "ask")
 					if errors.Is(err, context.Canceled) {
 						err = nil
 					} else {

@@ -41,7 +41,7 @@ func testExecutorReuse(t *testing.T, maxIdle int) {
 	}))
 	caller := spawn(t, n, factory(func(a *testBehavior, msg any) error {
 		if value, ok := msg.(int); ok {
-			result, err := a.Call(a.Context(), callee, value)
+			result, err := a.Call[any](a.Context(), callee, value)
 			if err != nil {
 				return err
 			}

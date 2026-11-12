@@ -43,7 +43,7 @@ func TestOutboundReplyCancellationRacesSignalReuse(t *testing.T) {
 		racers.Go(func() { <-start; cancel() })
 		racers.Go(func() {
 			<-start
-			if err := reply.Reply(int64(1)); err != nil && !errors.Is(err, ErrReplyExpired) {
+			if err := reply.ReplyChecked(int64(1)); err != nil && !errors.Is(err, ErrReplyExpired) {
 				t.Error(err)
 			}
 		})

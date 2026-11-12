@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 
@@ -21,19 +20,7 @@ func (c *counter) Receive(message any) error {
 	case add:
 		c.value += int(message)
 	case get:
-		if err := c.Reply(c.value); !errors.Is(err, actor.ErrReplyExpired) {
-			return err
-		}
-	}
-	return nil
-}
-
-type app struct{ actor.Actor }
-
-func (a *app) Receive(message any) error {
-	if _, ok := message.(actor.Started); ok {
-		_, err := a.Spawn(func() actor.Behavior { return &counter{} }, actor.WithName("counter"))
-		return err
+		return c.Reply(c.value)
 	}
 	return nil
 }
@@ -49,7 +36,9 @@ func run() error {
 		return err
 	}
 	defer node.Stop(context.Background())
-	if _, err = node.Spawn(func() actor.Behavior { return &app{} }, actor.WithName("app")); err != nil {
+	if _, err = node.Spawn(actor.Supervisor(actor.SupervisorSpec{
+		Children: []actor.ChildSpec{{Name: "counter", Factory: func() actor.Behavior { return &counter{} }}},
+	}), actor.WithName("app")); err != nil {
 		return err
 	}
 	ref := node.Ref("app/counter")

@@ -58,7 +58,7 @@ curl -X POST http://127.0.0.1:8080/accounts/alice/withdraw \
 
 ## 失败与重试边界
 
-服务端不自动重试业务操作。懒创建只处理明确的 `ErrNoProcess` / `ErrStarting`，`Unknown` 不会进入补建路径。超时、取消或回复丢失不能证明操作未执行；Actor 用 `ReplyError` 返回业务拒绝，只把 `ErrReplyExpired` 视为可丢弃的迟到回复。
+服务端不自动重试业务操作。懒创建只处理明确的 `ErrNoProcess` / `ErrStarting`，`Unknown` 不会进入补建路径。超时、取消或回复丢失不能证明操作未执行；Actor 用 `ReplyError` 返回业务拒绝，普通回复自动忽略已经过期的调用者。
 
 ## 验证
 

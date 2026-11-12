@@ -372,7 +372,7 @@ func (a *Actor) Send(to Addr, msg any) error {
 	a.proc.releaseNext()
 	return a.proc.node.send(to, msg, a.proc.selfAddr, nil)
 }
-func (a *Actor) Call(ctx context.Context, to Addr, msg any) (any, error) {
+func (a *Actor) call(ctx context.Context, to Addr, msg any) (any, error) {
 	a.proc.releaseNext()
 	if err := a.proc.preparationError(); err != nil {
 		return nil, err
@@ -391,7 +391,15 @@ func (a *Actor) Spawn(factory Factory, options ...SpawnOption) (PID, error) {
 	return a.proc.node.spawn(a.proc, a.Context(), factory, options...)
 }
 func (a *Actor) Stop(reason error) { a.proc.requestStop(reason, false) }
+
+// Reply submits a result, ignoring an expired caller. It does not confirm remote
+// receipt. Use ReplyChecked to inspect whether the local reply ticket has expired.
 func (a *Actor) Reply(value any) error {
+	return ignoreExpiredReply(a.ReplyChecked(value))
+}
+
+// ReplyChecked reports ErrReplyExpired if the request can no longer be answered.
+func (a *Actor) ReplyChecked(value any) error {
 	a.proc.releaseNext()
 	if a.proc.snapshot != nil {
 		return a.proc.snapshotReply(value, nil)
@@ -402,12 +410,17 @@ func (a *Actor) Reply(value any) error {
 	return a.proc.node.reply(a.proc.current.request, a.PID(), value, nil, false)
 }
 func (a *Actor) ReplyError(err error) error {
+	return ignoreExpiredReply(a.ReplyErrorChecked(err))
+}
+
+// ReplyErrorChecked is ReplyChecked for a business error.
+func (a *Actor) ReplyErrorChecked(err error) error {
 	a.proc.releaseNext()
 	if a.proc.snapshot != nil {
 		return a.proc.snapshotReply(nil, err)
 	}
 	if a.proc.current.request == nil {
-		return nil
+		return ErrNotCall
 	}
 	return a.proc.node.reply(a.proc.current.request, a.PID(), nil, err, false)
 }
@@ -430,14 +443,31 @@ type DeferredReply struct {
 }
 
 func (d DeferredReply) Reply(value any) error {
+	return ignoreExpiredReply(d.ReplyChecked(value))
+}
+
+// ReplyChecked submits a deferred result and reports expired credentials.
+func (d DeferredReply) ReplyChecked(value any) error {
 	if d.request == nil {
 		return ErrNotCall
 	}
 	return d.request.node.reply(d.request, d.owner, value, nil, false)
 }
 func (d DeferredReply) ReplyError(err error) error {
+	return ignoreExpiredReply(d.ReplyErrorChecked(err))
+}
+
+// ReplyErrorChecked is ReplyChecked for a deferred business error.
+func (d DeferredReply) ReplyErrorChecked(err error) error {
 	if d.request == nil {
 		return ErrNotCall
 	}
 	return d.request.node.reply(d.request, d.owner, nil, err, false)
+}
+
+func ignoreExpiredReply(err error) error {
+	if err == ErrReplyExpired {
+		return nil
+	}
+	return err
 }

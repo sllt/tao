@@ -44,7 +44,7 @@ func TestDefaultLocalCallBroadcastAndLateCompletionAfterReuse(t *testing.T) {
 		racers.Go(func() { signal(t, old.request.waitDone()) })
 		racers.Go(scope.timeout)
 		racers.Go(func() {
-			if err := old.Reply(42); err != nil && !errors.Is(err, ErrReplyExpired) {
+			if err := old.ReplyChecked(42); err != nil && !errors.Is(err, ErrReplyExpired) {
 				t.Error(err)
 			}
 		})
@@ -61,7 +61,7 @@ func TestDefaultLocalCallBroadcastAndLateCompletionAfterReuse(t *testing.T) {
 		}
 		signal(t, old.request.waitDone())
 		scope.timeout()
-		if err := old.Reply(1); !errors.Is(err, ErrReplyExpired) && !errors.Is(err, ErrAlreadyReplied) {
+		if err := old.ReplyChecked(1); !errors.Is(err, ErrReplyExpired) && !errors.Is(err, ErrAlreadyReplied) {
 			t.Fatalf("late reply: %v", err)
 		}
 		select {
@@ -108,7 +108,7 @@ func TestDefaultLocalScopeContextAndDeadline(t *testing.T) {
 			if ctx.Value(key{}) != "value" || context.Cause(ctx) != context.DeadlineExceeded {
 				t.Fatalf("completed context: value=%v cause=%v", ctx.Value(key{}), context.Cause(ctx))
 			}
-			if err := reply.Reply(1); !errors.Is(err, ErrReplyExpired) {
+			if err := reply.ReplyChecked(1); !errors.Is(err, ErrReplyExpired) {
 				t.Fatalf("late reply: %v", err)
 			}
 			if n.Stats().PendingCalls != 0 || n.network != nil {

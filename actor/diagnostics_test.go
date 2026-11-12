@@ -147,7 +147,7 @@ func TestSnapshotUsesPhysicalParentAndShowsCallWait(t *testing.T) {
 			var err error
 			child, err = a.Spawn(factory(func(a *testBehavior, msg any) error {
 				if _, ok := msg.(int); ok {
-					_, _ = a.Call(a.Context(), target, "get")
+					_, _ = a.Call[any](a.Context(), target, "get")
 				}
 				return nil
 			}), WithName("caller"))
@@ -226,13 +226,13 @@ func TestSnapshotFindsLiveSynchronousCallCycle(t *testing.T) {
 	var a, b PID
 	a = spawn(t, n, factory(func(actor *testBehavior, message any) error {
 		if message == "start" {
-			_, _ = actor.Call(ctx, b, "wait")
+			_, _ = actor.Call[any](ctx, b, "wait")
 		}
 		return nil
 	}), WithName("a"))
 	b = spawn(t, n, factory(func(actor *testBehavior, message any) error {
 		if message == "wait" {
-			_, _ = actor.Call(ctx, a, "finish")
+			_, _ = actor.Call[any](ctx, a, "finish")
 		}
 		return nil
 	}), WithName("b"))

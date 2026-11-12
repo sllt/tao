@@ -6,13 +6,13 @@ import (
 	"reflect"
 )
 
-// CallAs is Actor.Call with a typed reply. It preserves Call's timeout, caller
-// and Actor cancellation, self-call checks and address routing. A reply that
+// Call synchronously requests a typed reply. It honors caller and Actor
+// cancellation, self-call checks and address routing. A reply that
 // cannot be assigned to T returns its zero value and an ErrReplyType error.
 // A nil reply is accepted for nil-capable T, matching Node.Call[T].
-func (a *Actor) CallAs[T any](ctx context.Context, to Addr, msg any) (T, error) {
+func (a *Actor) Call[T any](ctx context.Context, to Addr, msg any) (T, error) {
 	var zero T
-	value, err := a.Call(ctx, to, msg)
+	value, err := a.call(ctx, to, msg)
 	if err != nil {
 		return zero, err
 	}

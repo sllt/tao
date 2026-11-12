@@ -56,9 +56,7 @@ func run() error {
 		case addCmd:
 			total += int64(m)
 		case getCmd:
-			if err := a.Reply(total); !errors.Is(err, actor.ErrReplyExpired) {
-				return err
-			}
+			return a.Reply(total)
 		}
 		return nil
 	}))

@@ -26,9 +26,7 @@ func (w *worker) Receive(message any) error {
 		if message == "crash" {
 			return errors.New("demonstration failure")
 		}
-		if err := w.Reply("recovered"); !errors.Is(err, actor.ErrReplyExpired) {
-			return err
-		}
+		return w.Reply("recovered")
 	}
 	return nil
 }

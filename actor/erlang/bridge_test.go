@@ -586,7 +586,7 @@ func TestBridgeReplyBeforeDownDeferredStopAndBusinessReplyError(t *testing.T) {
 	if !etf.TermEqual(deferredOutcome, wantDeferred) {
 		t.Fatalf("deferred request outcome = %#v, want %#v", deferredOutcome, wantDeferred)
 	}
-	if err := orphanTicket.Reply(etf.Atom("late")); !errors.Is(err, actor.ErrReplyExpired) {
+	if err := orphanTicket.ReplyChecked(etf.Atom("late")); !errors.Is(err, actor.ErrReplyExpired) {
 		t.Fatalf("late DeferredReply.Reply err = %v, want ErrReplyExpired", err)
 	}
 

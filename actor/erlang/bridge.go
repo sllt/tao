@@ -253,7 +253,7 @@ func (b *Bridge) watchUnderlyingNodes() {
 }
 
 // Outbound returns the local Tao Actor PID used to perform non-blocking Erlang Call, Cast,
-// and Send operations via Actor.Request or actor.CallAs (§4.2).
+// and Send operations via Actor.Request or actor.Call (§4.2).
 func (b *Bridge) Outbound() actor.PID {
 	return b.outboundPID
 }

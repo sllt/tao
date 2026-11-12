@@ -186,7 +186,7 @@ func (s *fixtureSupervisor) Receive(message any) error {
 		s.child <- pid
 	case ensureAccount:
 		s.ensures.Add(1)
-		return allowExpiredReply(s.Reply(actor.Ref{Path: "accounts/alice"}))
+		return s.Reply(actor.Ref{Path: "accounts/alice"})
 	}
 	return nil
 }
@@ -323,7 +323,7 @@ type unknownAccount struct {
 func (a *unknownAccount) Receive(message any) error {
 	if _, ok := message.(getAccount); ok {
 		a.calls.Add(1)
-		return allowExpiredReply(a.ReplyError(&actor.RemoteError{Code: "no_process", Message: "reply outcome is unknown", Outcome: actor.Unknown, Cause: actor.ErrNoProcess}))
+		return a.ReplyError(&actor.RemoteError{Code: "no_process", Message: "reply outcome is unknown", Outcome: actor.Unknown, Cause: actor.ErrNoProcess})
 	}
 	return nil
 }

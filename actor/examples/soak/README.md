@@ -38,7 +38,7 @@ Every fourth request from each caller routes through a local `async-bridge` acto
 ## Startup Probes & Output Schema
 
 Two deterministic startup probes verify:
-- Canceling an in-flight local `Call` after handler entry and confirming that a late `Reply` returns `ErrReplyExpired`.
+- Canceling an in-flight local `Call` after handler entry and confirming that a late `ReplyChecked` returns `ErrReplyExpired`.
 - Filling a capacity-1 mailbox while its handler is blocked and confirming that excess sends fail with `ErrMailboxFull` without executing.
 
 Each `stdout` line is a JSON object with `type` (`configuration`, `resources`, `phase`, `probe`, or `summary`), UTC `time`, `elapsed_ms`, and `data`. After both nodes stop (`nodes_closed`), the runner records `after_gc_0`, `after_gc_1`, and `after_gc_2` snapshots and verifies that zero active actors, pending calls, async requests, or queued messages remain.

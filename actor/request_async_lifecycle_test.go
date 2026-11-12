@@ -118,7 +118,7 @@ func TestAsyncRequestStopAndRestartDiscardOldResultsAndReleaseQuota(t *testing.T
 				case <-time.After(5 * time.Second):
 					t.Fatal("Stop did not cancel the old worker's callee context")
 				}
-				if err := oldTicket.Reply.Reply(99); !errors.Is(err, ErrReplyExpired) {
+				if err := oldTicket.Reply.ReplyChecked(99); !errors.Is(err, ErrReplyExpired) {
 					t.Fatalf("old incarnation still accepted a reply: %v", err)
 				}
 			}

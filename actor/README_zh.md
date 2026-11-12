@@ -20,7 +20,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 
@@ -46,11 +45,7 @@ func run() error {
 		if !ok {
 			return nil
 		}
-		err := self.Reply("hello " + name)
-		if errors.Is(err, actor.ErrReplyExpired) {
-			return nil
-		}
-		return err
+		return self.Reply("hello " + name)
 	}))
 	if err != nil {
 		return err
@@ -73,11 +68,14 @@ func run() error {
 | :--- | :--- | :--- |
 | 创建实例 | `Node.Spawn` / `Actor.Spawn` | 等待 `Started` 完成后返回 `PID` |
 | 单向消息 | `Node.Send` / `Actor.Send` | 返回准入或投递错误，不等待业务完成 |
-| 同步请求 | `Node.Call[T]` / `Actor.CallAs[T]` | 返回类型化结果和错误 |
+| 同步请求 | `Node.Call[T]` / `Actor.Call[T]` | 返回类型化结果和错误 |
 | 有序调用准入 | `Node.BeginCall` | 同步完成具体本地 `PID` 邮箱准入，通过无阻塞回调发布 `CallCompletion` |
 | 异步请求 | `Actor.Request` | 返回 `RequestID`，后续在 `Receive` 中处理 `CallResult` |
 | 回复 | `Reply` / `ReplyError` | 向当前调用者返回业务结果或业务拒绝 |
 | 延后回复 | `Defer` | 返回可在外部 goroutine 或后续消息中使用的一次性回复凭据 |
+| 延时消息 | `Actor.SendAfter` | 向当前实例发送，停止时自动取消；`TimerRef` 可取消或检查准入结果 |
+| 监督节点 | `Supervisor(SupervisorSpec)` | 返回声明式子树 Factory，复用现有监督机制 |
+| 消息注册 | `Msg[T](name, version)` | 构造类型样本，无需手写 `Sample` |
 | 观察生命周期 | `Monitor` / `Link` | 处理 `Down` / `Exit` 消息 |
 | 状态交接 | `Replace` / `Handoff` | 替换本地行为或跨节点迁移叶子 Actor |
 
@@ -86,8 +84,8 @@ func run() error {
 
 ## 使用约定
 
-- `Receive` 返回非 nil 错误或发生 panic 会触发监督。业务拒绝通过 `ReplyError` 回复；调用者不再等待导致的 `ErrReplyExpired` 可由业务明确忽略。
-- Actor 的状态和能力在 `Receive` 的同步调用栈中使用。异步 `Request` 的完成结果也由 `Receive` 串行处理。
+- `Receive` 返回非 nil 错误或发生 panic 会触发监督。普通 `Reply` / `ReplyError` 自动忽略正常过期，可直接从 handler 返回；使用 `ReplyChecked` / `ReplyErrorChecked` 检查 `ErrReplyExpired`。重复成功回复及非 Call 中回复仍报错。
+- Actor 的状态和能力（`Sender`、`Context`、`Send`、`SendAfter`、`Call`、`Reply`）在 `Receive` 的同步调用栈中使用。异步 `Request` 的完成结果也由 `Receive` 串行处理。
 - 本地消息直接传递内存引用，发送后不要修改已交付的 `map`、`slice` 等数据。
 - 邮箱与请求数量有上限；显式处理 `ErrMailboxFull`、`ErrCapacity` 和调用超时，不将接受消息当作业务执行完成。
 - 远程操作的 `Unknown` 结果不会自动重放。`Replace` / `Handoff` 不提供进程崩溃后的持久化恢复。

@@ -6,7 +6,7 @@ English | [简体中文](README_zh.md)
 
 ## Configuration
 
-Pass `actorpb.Codec{}` to `NodeOptions.Codec` and register pointer samples for your generated Protobuf message types:
+Pass `actorpb.Codec{}` to `NodeOptions.Codec` and register your generated Protobuf message pointer types with `actor.Msg`:
 
 ```go
 import (
@@ -20,7 +20,7 @@ func newNode() (*actor.Node, error) {
 		Name:  "protobuf-node",
 		Codec: actorpb.Codec{},
 		Register: []actor.MessageType{
-			{Name: "example.payload", Version: 1, Sample: (*wrapperspb.BytesValue)(nil)},
+			actor.Msg[*wrapperspb.BytesValue]("example.payload", 1),
 		},
 	})
 }

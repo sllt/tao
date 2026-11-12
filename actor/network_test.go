@@ -190,7 +190,7 @@ func TestRemoteCallsUseIndependentRepliesAndBidirectionalConnections(t *testing.
 	concurrent.Wait()
 	caller := spawn(t, a, factory(func(actor *testBehavior, msg any) error {
 		if _, ok := msg.(remoteCommand); ok {
-			reply, err := actor.Call(actor.Context(), Ref{Node: "b", Path: "counter"}, remoteCommand{Kind: "sender"})
+			reply, err := actor.Call[any](actor.Context(), Ref{Node: "b", Path: "counter"}, remoteCommand{Kind: "sender"})
 			if err != nil {
 				return actor.ReplyError(err)
 			}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 
@@ -21,9 +20,7 @@ func (c *counter) Receive(message any) error {
 	case add:
 		c.value += message.Amount * c.multiplier
 	case get:
-		if err := c.Reply(c.value); !errors.Is(err, actor.ErrReplyExpired) {
-			return err
-		}
+		return c.Reply(c.value)
 	case actor.Snapshotting:
 		return c.Reply(c.value)
 	case actor.Upgraded:

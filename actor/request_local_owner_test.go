@@ -387,7 +387,7 @@ func TestInlineLocalPIDCallLifecycleAndRaces(t *testing.T) {
 		expirePID := spawn(t, expireNode, factory(func(a *testBehavior, message any) error {
 			if message == "slow" {
 				<-a.Context().Done()
-				expiredReply <- a.Reply(1)
+				expiredReply <- a.ReplyChecked(1)
 			}
 			return nil
 		}))

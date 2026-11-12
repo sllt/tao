@@ -6,7 +6,7 @@
 
 ## 配置
 
-向 `NodeOptions` 传入 `Codec`，并注册生成消息的指针类型：
+向 `NodeOptions` 传入 `Codec`，并用 `actor.Msg` 注册生成消息的指针类型：
 
 ```go
 import (
@@ -20,7 +20,7 @@ func newNode() (*actor.Node, error) {
 		Name:  "protobuf-node",
 		Codec: actorpb.Codec{},
 		Register: []actor.MessageType{
-			{Name: "example.payload", Version: 1, Sample: (*wrapperspb.BytesValue)(nil)},
+			actor.Msg[*wrapperspb.BytesValue]("example.payload", 1),
 		},
 	})
 }
