@@ -5,7 +5,7 @@ go 1.27.0
 toolchain go1.27.3
 
 require (
-	github.com/sllt/tao/actor v0.1.0
+	github.com/sllt/tao/actor v0.2.0
 	go.etcd.io/etcd/api/v3 v3.7.3
 	go.etcd.io/etcd/client/v3 v3.7.3
 	go.etcd.io/etcd/server/v3 v3.7.3
@@ -36,7 +36,7 @@ require (
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/sllt/tao/taonet v0.1.0 // indirect
+	github.com/sllt/tao/taonet v0.2.0 // indirect
 	github.com/soheilhy/cmux v0.1.5 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75 // indirect
